@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Indie Game Arcade</title>
+    <style>
+        /* Dark mode theme for an arcade vibe */
+        body {
+            background-color: #121214;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            color: #00d2d3;
+            text-shadow: 0 0 10px rgba(0, 210, 211, 0.3);
+        }
+
+        .subtitle {
+            color: #a4b0be;
+            margin-bottom: 40px;
+        }
+
+        /* The grid container that holds all game cards */
+        .arcade-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            max-width: 1000px;
+            width: 100%;
+        }
+
+        /* Styling for each individual game box */
+        .game-card {
+            background: #1e1e24;
+            border: 2px solid #2f3542;
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        /* Hover effect to make it feel interactive */
+        .game-card:hover {
+            transform: translateY(-5px);
+            border-color: #00d2d3;
+            box-shadow: 0 10px 20px rgba(0, 210, 211, 0.1);
+        }
+
+        .game-card h2 {
+            margin-top: 0;
+            color: #ffffff;
+            font-size: 1.5rem;
+        }
+
+        .game-card p {
+            color: #747d8c;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            margin-bottom: 25px;
+            flex-grow: 1;
+        }
+
+        /* The Play Button */
+        .play-btn {
+            background-color: #00d2d3;
+            color: #121214;
+            text-decoration: none;
+            font-weight: bold;
+            padding: 12px 24px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+
+        .play-btn:hover {
+            background-color: #1dd1a1;
+        }
+
+        /* Styling for the unreleased game */
+        .disabled-card {
+            opacity: 0.5;
+            border-style: dashed;
+        }
+        .disabled-card:hover {
+            transform: none;
+            border-color: #2f3542;
+            box-shadow: none;
+        }
+        .disabled-btn {
+            background-color: #373e4a;
+            color: #57606f;
+            pointer-events: none;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>My HTML5 Arcade</h1>
+    <p class="subtitle">Select a game to launch directly in your browser.</p>
+
+    <div class="arcade-grid">
+
+        <div class="game-card">
+            <div>
+                <h2>Space Blob</h2>
+                <p>An action-packed cosmic blob arena, eat or be eaten</p>
+            </div>
+            <a href="space blob.html" class="play-btn">Launch Game</a>
+        </div>
+
+        <div class="game-card">
+            <div>
+                <h2>Worldcrafter</h2>
+                <p>A 3D voxel sandbox. Build, shape, and structure custom worlds.</p>
+            </div>
+            <a href="worldcrafter.html" class="play-btn">Launch Game</a>
+        </div>
+
+        <div class="game-card disabled-card">
+            <div>
+                <h2>Project: Mystery</h2>
+                <p>An unannounced upcoming project. Check back soon to see what new game mechanics are cooking next!</p>
+            </div>
+            <a href="#" class="play-btn disabled-btn">Coming Soon</a>
+        </div>
+
+    </div>
+
+</body>
+</html>
