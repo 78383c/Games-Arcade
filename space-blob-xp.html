@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>SPACE BLOB XP</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<style>
+  :root{
+    --ink:#060B14; --line:#0E2233; --bio:#7FD8FF; --coral:#FF5E5B; --text:#DCE9EE; --dim:#6E8794;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:var(--ink);color:var(--text);
+    font-family:ui-rounded,-apple-system,"SF Pro Rounded","Segoe UI",Roboto,sans-serif;
+    touch-action:none;overscroll-behavior:none;user-select:none;-webkit-user-select:none}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+
+  /* ---------- menu ---------- */
+  #menu{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(120% 90% at 50% 30%, #0A1626 0%, var(--ink) 70%);z-index:20}
+  .slide{width:min(340px,88vw);background:rgba(10,22,38,.72);border:1px solid var(--line);
+    border-radius:18px;padding:26px 22px;backdrop-filter:blur(8px);
+    box-shadow:0 0 60px rgba(127,216,255,.10), inset 0 0 30px rgba(183,139,255,.05)}
+  h1{font-size:34px;letter-spacing:.06em;text-align:center;color:var(--bio);
+    text-shadow:0 0 18px rgba(127,216,255,.6);font-weight:800;line-height:1}
+  h1 .xp{display:block;font-size:1.75em;letter-spacing:.1em;margin-top:-6px;
+    color:var(--coral);text-shadow:0 0 22px rgba(255,94,91,.65);}
+  .sub{text-align:center;color:var(--dim);font-size:12px;letter-spacing:.28em;margin:2px 0 20px}
+  input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line);
+    background:#04101C;color:var(--text);font-size:16px;outline:none;margin-bottom:12px;text-align:center}
+  input:focus{border-color:var(--bio)}
+  .btn{width:100%;padding:13px;border:none;border-radius:12px;font-size:16px;font-weight:700;
+    letter-spacing:.05em;cursor:pointer;margin-top:8px}
+  .btn.host{background:var(--bio);color:#071226}
+  .btn.join{background:transparent;color:var(--bio);border:1.5px solid var(--bio)}
+  .btn:active{transform:scale(.97)}
+  #joinRow{display:none;margin-top:12px}
+  #err{color:var(--coral);font-size:13px;text-align:center;margin-top:10px;min-height:16px}
+  .hint{color:var(--dim);font-size:12px;text-align:center;margin-top:14px;line-height:1.5}
+
+  /* ---------- HUD ---------- */
+  #hud{position:fixed;inset:0;pointer-events:none;z-index:10;display:none}
+  #roomTag{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);
+    background:rgba(4,16,28,.8);border:1px solid var(--bio);border-radius:999px;
+    padding:6px 16px;font-size:14px;letter-spacing:.12em;color:var(--bio);
+    text-shadow:0 0 10px rgba(127,216,255,.65)}
+  #board{position:fixed;top:calc(10px + env(safe-area-inset-top));right:10px;
+    background:rgba(4,16,28,.65);border:1px solid var(--line);border-radius:12px;
+    padding:8px 12px;font-size:12px;min-width:120px}
+  #board div{display:flex;justify-content:space-between;gap:10px;padding:1px 0}
+  #board .me{color:var(--bio)}
+  #skins{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:8px 0 4px;
+    max-height:132px;overflow-y:auto;padding:4px}
+  #skins .sk{width:44px;height:44px;border-radius:50%;cursor:pointer;
+    border:2px solid transparent;background:#12193A;display:flex;align-items:center;justify-content:center}
+  #skins .sk img{width:38px;height:38px;border-radius:50%;pointer-events:none}
+  #skins .sk.sel{border-color:var(--bio);box-shadow:0 0 12px rgba(127,216,255,.6)}
+  #skins .plain{font-size:20px}
+  #score{position:fixed;bottom:calc(14px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+    font-size:15px;color:var(--text);background:rgba(4,16,28,.65);border-radius:999px;padding:5px 16px}
+  .act{position:fixed;right:14px;pointer-events:auto;border-radius:50%;
+    border:2px solid var(--bio);background:rgba(4,16,28,.72);color:var(--bio);
+    font-weight:800;letter-spacing:.04em;box-shadow:0 0 18px rgba(127,216,255,.3)}
+  .act:active{background:rgba(127,216,255,.25)}
+  #splitBtn{width:86px;height:86px;bottom:calc(20px + env(safe-area-inset-bottom));font-size:15px}
+  #mergeBtn{width:64px;height:64px;bottom:calc(122px + env(safe-area-inset-bottom));font-size:12px;
+    border-color:#B78BFF;color:#B78BFF;box-shadow:0 0 18px rgba(183,139,255,.25)}
+  #pad{position:fixed;top:calc(12px + env(safe-area-inset-top));left:12px;font-size:13px;
+    color:var(--dim);display:none}
+  #toast{position:fixed;top:26%;left:50%;transform:translateX(-50%);font-size:22px;font-weight:800;
+    color:var(--coral);text-shadow:0 0 16px rgba(255,94,91,.6);opacity:0;transition:opacity .3s}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="menu">
+  <div class="slide">
+    <h1>SPACE BLOB<span class="xp">XP</span></h1>
+    <div class="sub">COSMIC ARENA · 10 BLOBS · v0.3</div>
+    <input id="nameIn" maxlength="12" placeholder="your name" autocomplete="off">
+    <div class="sub" style="margin-top:10px">PICK YOUR SKIN</div>
+    <div id="skins"></div>
+    <button class="btn host" id="hostBtn">HOST A GAME</button>
+    <button class="btn join" id="joinBtn">JOIN A GAME</button>
+    <div id="joinRow">
+      <input id="codeIn" maxlength="9" placeholder="code e.g. GK4P" autocomplete="off" style="text-transform:uppercase">
+      <button class="btn host" id="goBtn">CONNECT</button>
+    </div>
+    <div id="err"></div>
+    <div class="hint">drag anywhere to steer · SPLIT / MERGE buttons<br>controllers supported · bots fill empty slots</div>
+  </div>
+</div>
+
+<div id="hud">
+  <div id="roomTag"></div>
+  <div id="board"></div>
+  <div id="score"></div>
+  <button class="act" id="splitBtn">SPLIT</button>
+  <button class="act" id="mergeBtn">MERGE</button>
+  <div id="pad">🎮 controller connected</div>
+  <div id="toast"></div>
+</div>
+
+<script>
+"use strict";
+/* ================= CONFIG ================= */
+let WORLD = 6000;                    // current arena size — mutates live as the game runs
+const SLOTS = 10;
+const FOOD_N = 700;
+const START_MASS = 20;
+const MIN_SPLIT_MASS = 36;
+const MAX_CELLS = 16;
+const mergeTime = m => Math.min(20, 8 + m*0.02);   // Nebulous-style: bigger = longer
+const EAT_RATIO = 1.15;
+const SNAP_HZ = 15;
+const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const VIRUS_MASS = 100, MAX_VIRUS = 220;             // MAX_VIRUS is a technical safety cap, not a design cap
+
+/* ---- expanding arena (driven by sum of top-3 players' mass) ---- */
+const WORLD_BASE = 6000;             // starting size, expansion baseline
+const WORLD_EXPAND_K = 70.7;         // WORLD_target = BASE + K*sqrt(top3 mass sum)
+const WORLD_MAX_REF = 16000;         // reference "escalated" size used to normalize pellet risk (no hard cap on growth itself)
+const WORLD_SMOOTH = 0.02;           // eased toward target each tick — smooth, no snapping, shrinks push players via the normal edge clamp
+let worldTarget = WORLD_BASE;
+
+/* ---- growth ceiling ---- */
+const MASS_CAP = 20000;              // once a player's total mass hits this, positive pellets/virus gains stop working
+
+/* ---- 3-tier viruses ---- */
+const GREEN_N = 16, YELLOW_N = 10, RED_BASE_N = 3, RED_STEP = 1000; // red count scales up as WORLD grows
+const GREEN_EAT_MIN = VIRUS_MASS*EAT_RATIO;   // below this cell mass: too small, green does nothing
+const GREEN_EAT_MAX = 2500;                    // above this: too big to engulf cleanly, green pops you
+const GREEN_BONUS_MULT = 3;                    // catch-up multiplier on virus mass gained, ranks 6-10 only
+const GREEN_POP_FRAG = 7, YELLOW_POP_FRAG = 5, RED_POP_FRAG = 10; // red pops into the most pieces
+const RED_DRAIN_PCT = 0.20;                    // top-3 only: 20% of mass ejected as rival-only pickups
+
+/* ---- bot names & difficulty tiers ---- */
+const BOT_NAMES = ["Mito","Cyto","Lyso","Golgi","Vacu","Ribo","Nucleo","Plasmo","Flagel",
+  "Blip","Nova","Zeta","Orbit","Comet","Pixel","Static","Vortex","Nimbus","Quark","Photon","Steve","Liam"];
+const BOSS_NAMES = new Set(["Steve","Liam"]);  // locked Hard forever, immune to popping from green, always get the bonus
+const TIER_REACT = [[0.9,1.5],[0.4,0.8],[0.15,0.4]];  // [min,max]s re-evaluate interval per tier: Easy, Normal, Hard
+const GRUDGE_FADE_TIME = 45;                    // seconds an avenged grudge lingers before clearing
+function randomBotName(usedLower){
+  const pool=BOT_NAMES.filter(n=>!usedLower.has(n.toLowerCase()));
+  const list=pool.length?pool:BOT_NAMES;
+  return list[Math.floor(Math.random()*list.length)];
+}
+function uniqueName(base,existingLower){          // disambiguates a name against the current roster (case-insensitive)
+  if(!existingLower.has(base.toLowerCase())) return base;
+  let n=2;
+  while(true){
+    const candidate=(base+n).slice(0,12);
+    if(!existingLower.has(candidate.toLowerCase())) return candidate;
+    n++;
+  }
+}
+function blankNameFallback(){                     // random identity for anyone who leaves the name field empty
+  const pool=BOT_NAMES.filter(n=>!BOSS_NAMES.has(n));   // never hand out Steve/Liam by accident
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+/* ================= STATE ================= */
+let isHost=false, peer=null, conns=[];      // host: conns list; client: conns[0]
+let myId=null, myName="blob";
+let players=[];                              // host-authoritative
+let food=new Map(), foodSeq=0, foodEaten=[], foodNew=[];
+let running=false, lastT=0;
+let cam={x:WORLD/2,y:WORLD/2,z:1};
+let snapPrev=null, snapCur=null, snapT=0;
+let clientRoster=new Map(), clientViruses=[];   // client interpolation
+let clientFood=new Map();
+let input={dx:0,dy:0}, splitQueued=false, mergeQueued=false;
+let joy=null;                 // {ax,ay,dx,dy} anchor + vector while dragging
+let padOn=false, padPrev={};
+let viruses=[];               // host-side; clients read from snapshots
+
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+let DPR=1;
+function resize(){DPR=Math.min(window.devicePixelRatio||1,2);
+  cv.width=innerWidth*DPR; cv.height=innerHeight*DPR;}
+addEventListener("resize",resize); resize();
+
+const $=id=>document.getElementById(id);
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const radius=m=>4+Math.sqrt(m)*4.2;
+const lerp=(a,b,t)=>a+(b-a)*t;
+
+/* ================= ENTITIES ================= */
+// pellets are visually identical — the +1/+2/-1 outcome is hidden until eaten.
+// odds drift as the arena expands: early/small map = mostly safe, escalated map = riskier.
+function pelletGrowth(){return clamp((WORLD-WORLD_BASE)/(WORLD_MAX_REF-WORLD_BASE),0,1);}
+function pelletValue(){
+  const g=pelletGrowth();
+  const p1=0.90-0.40*g, p2=0.07+0.13*g;      // p(-1) is whatever's left
+  const r=Math.random();
+  if(r<p1) return 1;
+  if(r<p1+p2) return 2;
+  return -1;
+}
+function makeFood(){const id=foodSeq++;
+  const f={id,x:rnd(60,WORLD-60),y:rnd(60,WORLD-60),v:pelletValue()};
+  food.set(id,f); foodNew.push(f); return f;}
+
+let virusDirty=true, rosterDirty=true;
+function makeVirus(x,y,type){
+  viruses.push({x:x??rnd(200,WORLD-200),y:y??rnd(200,WORLD-200),type:type||'g'});
+  virusDirty=true;
+}
+function redTargetCount(){return RED_BASE_N+Math.floor(Math.max(0,WORLD-WORLD_BASE)/RED_STEP);}
+function maintainViruses(){                  // tops up each virus type toward its target count
+  let g=0,y=0,r=0;
+  for(const v of viruses){if(v.type==='g')g++;else if(v.type==='y')y++;else if(v.type==='r')r++;}
+  const redTarget=redTargetCount();
+  while(viruses.length<MAX_VIRUS && g<GREEN_N){makeVirus(null,null,'g');g++;}
+  while(viruses.length<MAX_VIRUS && y<YELLOW_N){makeVirus(null,null,'y');y++;}
+  while(viruses.length<MAX_VIRUS && r<redTarget){makeVirus(null,null,'r');r++;}
+}
+
+function makePlayer(name,isBot,skin){
+  const isBoss=isBot&&BOSS_NAMES.has(name);
+  const p={id:"p"+Math.random().toString(36).slice(2,8),name,isBot,isBoss,conn:null,
+    hue:Math.floor(rnd(0,360)),skin:skin||"",cells:[],score:0,respawn:0,
+    in:{dx:0,dy:0},split:false,ai:{t:0,tx:0,ty:0},
+    tier:isBoss?2:0, grudges:isBoss?[]:null};   // tier: 0=Easy 1=Normal 2=Hard; bosses locked at Hard
+  spawn(p); return p;}
+
+function spawn(p){p.cells=[{x:rnd(300,WORLD-300),y:rnd(300,WORLD-300),
+  m:p.keepM||START_MASS,ix:0,iy:0,mt:0}]; p.keepM=0;}
+
+function totalMass(p){return p.cells.reduce((s,c)=>s+c.m,0);}
+
+/* ================= HOST SIM ================= */
+function hostStart(){
+  players=[]; food.clear(); foodSeq=0; viruses=[];
+  WORLD=WORLD_BASE; worldTarget=WORLD_BASE;
+  for(let i=0;i<FOOD_N;i++) makeFood();
+  maintainViruses();
+  foodNew=[]; // initial food goes in init message, not diffs
+  const me=makePlayer(myName,false,mySkin); myId=me.id; players.push(me);
+  const usedNames=new Set([myName.toLowerCase()]);
+  for(let i=0;i<SLOTS-1;i++){
+    const nm=randomBotName(usedNames); usedNames.add(nm.toLowerCase());
+    players.push(makePlayer(nm,true));
+  }
+}
+
+function simulate(dt){
+  // inputs -> my player
+  const me=players.find(p=>p.id===myId);
+  if(me){me.in.dx=input.dx; me.in.dy=input.dy;
+    if(splitQueued){me.split=true; splitQueued=false;}
+    if(mergeQueued){me.merge=true; mergeQueued=false;}}
+  for(const p of players){
+    if(p.isBot) botThink(p,dt);
+    if(p.cells.length===0){p.respawn-=dt;
+      if(p.respawn<=0){
+        if(p.isBot&&!p.isBoss) p.tier=(p.tier+1)%3;   // Easy -> Normal -> Hard -> Easy...
+        spawn(p); sendToPlayer(p,{t:"re"});
+      } continue;}
+    // split / merge requests
+    if(p.split){p.split=false; doSplit(p);}
+    if(p.merge){p.merge=false; doMergeAll(p);}
+    p.score=Math.floor(totalMass(p));           // realtime leaderboard
+    const len=Math.hypot(p.in.dx,p.in.dy)||1;
+    const ux=p.in.dx/len, uy=p.in.dy/len, drive=Math.min(1,len);
+    for(const c of p.cells){
+      const sp=drive*240*Math.pow(c.m/START_MASS,-0.25);
+      c.x+=(ux*sp+c.ix)*dt; c.y+=(uy*sp+c.iy)*dt;
+      const dec=Math.pow(0.05,dt); c.ix*=dec; c.iy*=dec;
+      c.mt=Math.max(0,c.mt-dt);
+      // no mass decay — blobs keep what they eat
+      const r=radius(c.m);
+      c.x=clamp(c.x,r,WORLD-r); c.y=clamp(c.y,r,WORLD-r);
+    }
+    // merge-ready pieces drift toward the group's center so they can rejoin
+    p.fm=Math.max(0,(p.fm||0)-dt);
+    if(p.cells.length>1){
+      const fm=p.fm>0;
+      let gx=0,gy=0,gm=0;
+      for(const c of p.cells){gx+=c.x*c.m;gy+=c.y*c.m;gm+=c.m;}
+      gx/=gm;gy/=gm;
+      for(const c of p.cells){
+        if(fm) c.mt=Math.max(0,c.mt-dt*3);        // recall burns cooldown 4x total
+        if(c.mt>0&&!fm) continue;
+        const ddx=gx-c.x,ddy=gy-c.y,dd=Math.hypot(ddx,ddy);
+        if(dd>1){const s=Math.min(fm?520:300,(fm?260:120)+dd*2.5);
+          c.x+=ddx/dd*s*dt; c.y+=ddy/dd*s*dt;}
+      }
+    }
+    selfCollide(p,dt);
+  }
+  updateWorldSize(dt);
+  computeRanks();
+  virusHits();
+  eatFood(); eatCells();
+  for(const p of players) p.score=Math.max(p.score,Math.floor(totalMass(p)));
+  while(food.size<FOOD_N) makeFood();
+  maintainViruses();
+}
+
+function updateWorldSize(dt){                // arena grows/shrinks smoothly with top-3 mass sum
+  const sorted=[...players].sort((a,b)=>b.score-a.score);
+  const top3=sorted.slice(0,3).reduce((s,p)=>s+p.score,0);
+  worldTarget=WORLD_BASE+WORLD_EXPAND_K*Math.sqrt(top3);
+  const ease=clamp(WORLD_SMOOTH*dt*60,0,1);
+  WORLD=lerp(WORLD,worldTarget,ease);
+}
+
+function computeRanks(){                     // 1 = leader; used by green/yellow/red virus gating
+  const sorted=[...players].sort((a,b)=>b.score-a.score);
+  sorted.forEach((p,i)=>p.rank=i+1);
+}
+
+function doSplit(p){
+  const add=[];
+  for(const c of p.cells){
+    if(c.m<MIN_SPLIT_MASS||p.cells.length+add.length>=MAX_CELLS) continue;
+    c.m/=2;
+    const len=Math.hypot(p.in.dx,p.in.dy);
+    const ux=len>0.05?p.in.dx/len:1, uy=len>0.05?p.in.dy/len:0;
+    const MT=mergeTime(c.m);
+    const r=radius(c.m);
+    const imp=500+r*9;                              // bigger halves launch further
+    add.push({x:c.x+ux*r*0.9,y:c.y+uy*r*0.9,m:c.m,
+      ix:ux*imp+c.ix*0.5,iy:uy*imp+c.iy*0.5,mt:MT}); // spawn at rim, inherit momentum
+    c.ix-=ux*imp*0.12; c.iy-=uy*imp*0.12;           // slight recoil on the parent
+    c.mt=Math.max(c.mt,MT);
+  }
+  p.cells.push(...add);
+}
+
+function doMergeAll(p){        // MERGE = "recall": 3s of strong pull + faster cooldown drain
+  if(p.cells.length<2) return;
+  p.fm=3;
+}
+
+function virusHits(){
+  const rV=radius(VIRUS_MASS);
+  for(const p of players){
+    const rank=p.rank||99;
+    for(let ci=p.cells.length-1;ci>=0;ci--){
+      const c=p.cells[ci];
+      const rc=radius(c.m);
+      for(let vi=viruses.length-1;vi>=0;vi--){
+        const v=viruses[vi];
+        const dist=Math.hypot(v.x-c.x,v.y-c.y);
+        if(v.type==='g'){
+          if(c.m<GREEN_EAT_MIN) continue;              // too small: nothing, safe pass-through
+          if(dist<rc-rV*0.35){                          // engulf range
+            viruses.splice(vi,1); virusDirty=true;
+            if(!(p.isBoss&&p.isBot) && c.m>GREEN_EAT_MAX){   // too big to engulf cleanly -> pop (AI bosses are immune; human-controlled are not)
+              popCell(p,c,GREEN_POP_FRAG);
+            }else{                                       // right size -> eat it (always true for AI bosses)
+              const tot=totalMass(p);
+              if(tot<MASS_CAP){
+                let gain=VIRUS_MASS;
+                if((p.isBoss&&p.isBot)||(rank>=6&&rank<=10)) gain*=GREEN_BONUS_MULT;   // catch-up bonus; AI bosses always get it
+                c.m=Math.min(MASS_CAP,c.m+gain);
+              }
+            }
+            break;
+          }
+        }else if(v.type==='y'){                         // universal flat hazard, no rank/size gate
+          if(dist<rc+rV*0.3){
+            viruses.splice(vi,1); virusDirty=true;
+            popCell(p,c,YELLOW_POP_FRAG);
+            break;
+          }
+        }else if(v.type==='r'){                          // only bites the top 3
+          if(dist<rc+rV*0.3){
+            if(rank<=3){
+              const vx=v.x, vy=v.y;
+              viruses.splice(vi,1); virusDirty=true;
+              popCell(p,c,RED_POP_FRAG);
+              redDrain(p,vx,vy);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
+function popCell(p,c,maxFrag){
+  let n=0;
+  const cap=maxFrag||7;
+  while(p.cells.length<MAX_CELLS && c.m>44 && n<cap){
+    c.m/=2; n++;
+    const a=rnd(0,Math.PI*2);
+    const MT=mergeTime(c.m);
+    p.cells.push({x:c.x,y:c.y,m:c.m,ix:Math.cos(a)*560,iy:Math.sin(a)*560,mt:MT});
+    c.mt=Math.max(c.mt,MT);
+  }
+}
+
+function redDrain(p,x,y){                     // top-3 red hit: 20% of mass ejected as rival-only pickups
+  const tot=totalMass(p);
+  if(tot<=0) return;
+  const dm=tot*RED_DRAIN_PCT;
+  for(const cc of p.cells) cc.m=Math.max(6,cc.m-dm*(cc.m/tot));
+  const n=6;
+  for(let i=0;i<n;i++){
+    const id=foodSeq++;
+    const a=rnd(0,Math.PI*2), d=rnd(20,90);
+    const f={id,x:x+Math.cos(a)*d,y:y+Math.sin(a)*d,v:Math.max(1,Math.round(dm/n)),owner:p.id};
+    food.set(id,f); foodNew.push(f);
+  }
+}
+
+function selfCollide(p,dt){
+  const cs=p.cells;
+  for(let i=0;i<cs.length;i++)for(let j=i+1;j<cs.length;j++){
+    let a=cs[i],b=cs[j];
+    if(b.m>a.m){const t=a;a=b;b=t;}             // a = bigger cell
+    if(b.m<=0||a.m<=0) continue;
+    const ra=radius(a.m),rb=radius(b.m);
+    const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||0.01;
+    if(a.mt<=0&&b.mt<=0){
+      if(d<ra+rb*0.25){                         // deep overlap: big one drinks the small one
+        const dm=Math.min(b.m,Math.max(30,b.m*5)*dt);
+        a.m+=dm; b.m-=dm;
+        // suction pulls the small one toward the big one's center
+        b.x+= -dx/d*140*dt; b.y+= -dy/d*140*dt;
+        if(b.m<1.5){a.m+=b.m;b.m=0;}            // fully drained; swept below
+      }
+    }else if(d<ra+rb){                          // squishy push while on cooldown
+      const push=(ra+rb-d)*0.55,ux=dx/d,uy=dy/d;
+      const wa=b.m/(a.m+b.m), wb=a.m/(a.m+b.m); // mass-weighted: small yields more
+      a.x-=ux*push*wa;a.y-=uy*push*wa;
+      b.x+=ux*push*wb;b.y+=uy*push*wb;}
+  }
+  p.cells=cs.filter(c=>c.m>0);
+}
+
+function eatFood(){
+  for(const p of players)for(const c of p.cells){
+    const r=radius(c.m);
+    for(const f of food.values()){
+      if(f.owner===p.id) continue;              // can't eat mass a red virus drained off yourself
+      const dx=f.x-c.x; if(dx>r||dx<-r) continue;
+      const dy=f.y-c.y; if(dy>r||dy<-r) continue;
+      if(dx*dx+dy*dy<r*r){
+        const v=f.v===undefined?1:f.v;
+        if(v>0){ if(totalMass(p)<MASS_CAP) c.m=Math.min(MASS_CAP,c.m+v); }
+        else{ c.m=Math.max(6,c.m+v); }
+        food.delete(f.id);foodEaten.push(f.id);
+      }
+    }
+  }
+}
+
+function eatCells(){
+  for(const A of players)for(const B of players){
+    if(A===B||A.cells.length===0) continue;
+    for(const ca of A.cells){
+      const ra=radius(ca.m);
+      for(let k=B.cells.length-1;k>=0;k--){
+        const cb=B.cells[k];
+        if(ca.m<cb.m*EAT_RATIO) continue;
+        const rb=radius(cb.m);
+        if(Math.hypot(cb.x-ca.x,cb.y-ca.y)<ra-rb*0.35){
+          ca.m+=cb.m; B.cells.splice(k,1);
+          if(A.isBoss) avengeGrudge(A,B.id);      // eating any mass of a grudge target starts its fade
+          if(B.cells.length===0){B.respawn=3;
+            B.keepM=Math.max(START_MASS,Math.floor(B.score*0.2)); // keep 20% on death
+            sendToPlayer(B,{t:"dead"});
+            if(B.id===myId&&isHost) showToast("EATEN!");
+            if(B.isBoss) addGrudge(B,A.id);        // boss killed -> permanent grudge against the killer
+          }
+        }
+      }
+    }
+  }
+}
+
+function addGrudge(boss,killerId){                 // Steve/Liam only: remembers who's killed them, forever until avenged
+  if(!boss.grudges||killerId===boss.id) return;
+  const g=boss.grudges.find(x=>x.id===killerId);
+  if(g){g.avenged=false;g.fadeAt=0;}                // killed again -> grudge reignites
+  else boss.grudges.push({id:killerId,avenged:false,fadeAt:0});
+}
+function avengeGrudge(boss,targetId){               // landing a bite on a grudge target starts its fade timer
+  if(!boss.grudges) return;
+  const g=boss.grudges.find(x=>x.id===targetId&&!x.avenged);
+  if(g){g.avenged=true;g.fadeAt=performance.now()+GRUDGE_FADE_TIME*1000;}
+}
+
+/* --------- bots --------- */
+function botThink(p,dt){
+  p.ai.t-=dt;
+  if(p.cells.length===0) return;
+  const c=p.cells[0], myM=totalMass(p), rank=p.rank||99;
+  const tier=p.tier||0;                        // 0=Easy 1=Normal 2=Hard
+  const awareHazards=tier>=1;                   // Easy ignores virus hazards entirely
+  const seekGreenBonus=tier>=2&&!p.isBoss;      // Hard hunts the green bonus; bosses never learn they're immune
+  if(p.ai.t<=0){
+    const [rmin,rmax]=TIER_REACT[tier]||TIER_REACT[1];
+    p.ai.t=rmin+Math.random()*(rmax-rmin);
+    let tx=null,ty=null,best=1e9,flee=null,fd=1e9,prey=null,pd=1e9;
+    for(const q of players){
+      if(q===p||q.cells.length===0) continue;
+      for(const qc of q.cells){
+        const d=Math.hypot(qc.x-c.x,qc.y-c.y);
+        if(qc.m>myM*1.25&&d<radius(qc.m)+420&&d<fd){fd=d;flee=qc;}
+        if(myM>qc.m*1.4&&d<560&&d<pd){pd=d;prey=qc;}
+      }
+    }
+    // grudges (Steve/Liam only): a living target on the hit-list overrides normal prey, hunted over a wider range
+    if(p.isBoss&&p.grudges&&p.grudges.length){
+      const now=performance.now();
+      for(let i=p.grudges.length-1;i>=0;i--){
+        const g=p.grudges[i];
+        if(g.avenged&&now>g.fadeAt) p.grudges.splice(i,1);      // avenged grudges fade out over time
+      }
+      let gtd=1e9;
+      for(const g of p.grudges){
+        const q=players.find(x=>x.id===g.id);
+        if(!q||q.cells.length===0) continue;
+        for(const qc of q.cells){
+          const d=Math.hypot(qc.x-c.x,qc.y-c.y);
+          if(d<1400&&d<gtd){gtd=d;prey=qc;pd=d;}                 // wide range, overrides incidental prey
+        }
+      }
+    }
+    // virus awareness: steer clear of real hazards, path toward an eatable green for the catch-up bonus
+    let hazard=null,hd=1e9,greenPrize=null,gd=1e9;
+    if(awareHazards){
+      for(const v of viruses){
+        const d=Math.hypot(v.x-c.x,v.y-c.y);
+        if(v.type==='y'&&d<380&&d<hd){hd=d;hazard=v;}                 // yellow: always dangerous
+        else if(v.type==='r'&&rank<=3&&d<380&&d<hd){hd=d;hazard=v;}   // red: only a threat if we're top 3
+        else if(v.type==='g'){
+          if(!p.isBoss&&c.m>GREEN_EAT_MAX&&d<380&&d<hd){hd=d;hazard=v;}   // too big to engulf -> would pop (bosses immune)
+          else if(seekGreenBonus&&c.m>=GREEN_EAT_MIN&&c.m<=GREEN_EAT_MAX&&d<700&&d<gd){gd=d;greenPrize=v;}
+        }
+      }
+    }
+    if(flee){p.ai.tx=c.x-(flee.x-c.x);p.ai.ty=c.y-(flee.y-c.y);}
+    else if(hazard){p.ai.tx=c.x-(hazard.x-c.x);p.ai.ty=c.y-(hazard.y-c.y);}
+    else if(greenPrize&&(rank>=6&&rank<=10||Math.random()<0.4)){
+      p.ai.tx=greenPrize.x;p.ai.ty=greenPrize.y;}
+    else if(prey){p.ai.tx=prey.x;p.ai.ty=prey.y;
+      if(pd<260&&myM>prey.m*2.6&&c.m>MIN_SPLIT_MASS&&p.cells.length<3&&Math.random()<0.25){
+        p.in.dx=prey.x-c.x;p.in.dy=prey.y-c.y;p.split=true;}}
+    else{for(const f of food.values()){
+        if(f.owner===p.id) continue;                 // can't eat your own drained mass
+        const w=f.owner?0.4:1;                        // rival drain pellets are free value — treat as closer
+        const d=(Math.abs(f.x-c.x)+Math.abs(f.y-c.y))*w;
+        if(d<best){best=d;tx=f.x;ty=f.y;}}
+      if(tx!=null){p.ai.tx=tx;p.ai.ty=ty;}}
+  }
+  p.in.dx=p.ai.tx-c.x; p.in.dy=p.ai.ty-c.y;
+}
+
+/* ================= NETWORK ================= */
+function newCode(){let s="";for(let i=0;i<4;i++)s+=CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)];return s;}
+
+function connFail(msg){
+  $("err").textContent=msg;
+}
+
+function hostGame(){
+  const code=newCode();
+  isHost=true; conns=[]; hostStart(); startPlay(code);   // play immediately, exactly like solo
+  if(typeof Peer!=="undefined") connectHostPeer(code);   // networking connects quietly in the background;
+}                                                          // if it never comes up, you're already playing against bots either way
+
+function connectHostPeer(code){
+  peer=new Peer("spaceblob-"+code,{debug:1});
+  peer.on("error",e=>{
+    if(e.type==="unavailable-id"){                       // code taken — silently retry with a fresh one
+      try{peer.destroy();}catch(_){}
+      const nc=newCode(); $("roomTag").textContent=nc; connectHostPeer(nc);
+    }
+    // any other network error: stay silent — the match is already running locally either way
+  });
+  peer.on("connection",conn=>{
+    conn.on("open",()=>{});
+    conn.on("data",d=>hostOnData(conn,d));
+    conn.on("close",()=>dropConn(conn));
+  });
+}
+
+function hostOnData(conn,d){
+  try{
+  if(d.t==="hi"){
+    if(conn._pid) return;                       // duplicate hi
+    const name=(String(d.n||"").replace(/[<>&"']/g,"").slice(0,12).trim())||blankNameFallback();
+    const skin=SKIN_DATA[d.k]?d.k:"";
+    const bossSlot=players.find(p=>p.isBot&&p.isBoss&&p.name.toLowerCase()===name.toLowerCase());
+    let np;
+    if(bossSlot){                                // claim the boss identity in place — buff pauses while human-controlled
+      bossSlot.isBot=false; bossSlot.conn=conn; np=bossSlot;
+    }else{
+      const bi=players.findIndex(p=>p.isBot);
+      if(bi<0){conn.send({t:"full"});return;}     // no free slot
+      players.splice(bi,1);                       // newcomer replaces a bot
+      const existingLower=new Set(players.map(p=>p.name.toLowerCase()));
+      np=makePlayer(uniqueName(name,existingLower),false,skin);
+      np.conn=conn; players.push(np);
+    }
+    if(conns.indexOf(conn)<0) conns.push(conn);
+    conn._pid=np.id; rosterDirty=true;
+    try{conn.send({t:"init",id:np.id,w:WORLD,f:[...food.values()],r:roster(),v:viruses.map(v=>[v.x,v.y,v.type])});}catch(_){}
+  }else if(d.t==="in"){
+    const p=players.find(x=>x.id===conn._pid);
+    if(p){p.in.dx=d.x;p.in.dy=d.y;}
+  }else if(d.t==="sp"){
+    const p=players.find(x=>x.id===conn._pid); if(p)p.split=true;
+  }else if(d.t==="mg"){
+    const p=players.find(x=>x.id===conn._pid); if(p)p.merge=true;
+  }
+  }catch(err){console.error("bad packet",err);}
+}
+
+function dropConn(conn){
+  const i=players.findIndex(p=>p.id===conn._pid);
+  if(i>=0){
+    const p=players[i];
+    if(p.isBoss){ p.isBot=true; p.conn=null; }   // hand the identity back to AI — buff resumes automatically
+    else{
+      players.splice(i,1);
+      const used=new Set(players.map(x=>x.name.toLowerCase()));
+      players.push(makePlayer(randomBotName(used),true));
+    }
+    rosterDirty=true;
+  }
+  conns=conns.filter(c=>c!==conn);
+}
+
+function safeSend(conn,msg){
+  try{
+    if(!conn||!conn.open) return;
+    const dc=conn.dataChannel;
+    if(dc&&dc.bufferedAmount>65536) return;   // backpressure: skip, don't queue lag
+    conn.send(msg);
+  }catch(_){/* conn died mid-send; dropConn will handle it */}
+}
+function sendToPlayer(p,msg){safeSend(p.conn,msg);}
+
+function roster(){return players.map(p=>({i:p.id,n:p.name,h:p.hue,b:p.isBot?1:0,k:p.skin}));}
+let lastFoodSync=0;
+function broadcast(){
+  const snap={t:"st", w:Math.round(WORLD),
+    p:players.map(p=>({i:p.id,s:p.score,
+      c:p.cells.map(c=>[Math.round(c.x),Math.round(c.y),Math.round(c.m*10)/10,Math.round(c.mt*10)/10])})),
+    fe:foodEaten,fn:foodNew};
+  if(virusDirty){snap.v=viruses.map(v=>[Math.round(v.x),Math.round(v.y),v.type]);virusDirty=false;}
+  if(rosterDirty){snap.r=roster();rosterDirty=false;}
+  foodEaten=[];foodNew=[];
+  // periodic full-food safety resync (cheap: ~10KB every 10s)
+  const now=performance.now();
+  if(now-lastFoodSync>10000){lastFoodSync=now;for(const c of conns)c._needFood=true;}
+  for(const c of conns){
+    if(!c||!c.open) continue;
+    const dc=c.dataChannel;
+    if(dc&&dc.bufferedAmount>65536){c._needFood=true;continue;} // skipped => deltas lost => must resync
+    if(c._needFood){c._needFood=false;
+      safeSend(c,{...snap,ff:[...food.values()],v:viruses.map(v=>[v.x,v.y,v.type])});}
+    else safeSend(c,snap);
+  }
+}
+
+function joinGame(code){
+  peer=new Peer({debug:1});
+  $("err").textContent="connecting…";
+  let joinTO=null,watchIce=null;
+  const settle=()=>{if(joinTO)clearTimeout(joinTO);if(watchIce)clearInterval(watchIce);};
+  peer.on("error",e=>{
+    settle();
+    $("err").textContent = e.type==="peer-unavailable" ? "no game with that code" : "connection error: "+e.type;
+  });
+  peer.on("open",()=>{
+    const conn=peer.connect("spaceblob-"+code.toUpperCase(),{reliable:true});
+    conns=[conn];
+    const natMsg="found the game but couldn't connect — likely both devices are behind strict mobile NAT (a TURN server would fix this)";
+    joinTO=setTimeout(()=>{
+      if(!running){settle();try{peer.destroy();}catch(_){}connFail(natMsg);}
+    },12000);
+    // report ICE failure as soon as WebRTC gives up (faster than the timeout)
+    watchIce=setInterval(()=>{
+      const pc=conn.peerConnection;
+      if(!pc) return;
+      clearInterval(watchIce);
+      pc.oniceconnectionstatechange=()=>{
+        if((pc.iceConnectionState==="failed"||pc.iceConnectionState==="disconnected")&&!running){
+          settle();try{peer.destroy();}catch(_){}connFail(natMsg);}
+      };
+    },200);
+    conn.on("open",()=>conn.send({t:"hi",n:myName,k:mySkin}));
+    conn.on("data",d=>{
+      if(d.t==="init"){settle();
+        myId=d.id;clientFood=new Map(d.f.map(f=>[f.id,f]));
+        clientRoster=new Map((d.r||[]).map(p=>[p.i,p]));clientViruses=d.v||[];
+        if(d.w) WORLD=d.w;
+        isHost=false; startPlay(code.toUpperCase());}
+      else if(d.t==="st"){snapPrev=snapCur;snapCur=d;snapT=0;
+        if(d.w) WORLD=d.w;
+        if(d.r) clientRoster=new Map(d.r.map(p=>[p.i,p]));
+        if(d.v) clientViruses=d.v;
+        if(d.ff) clientFood=new Map(d.ff.map(f=>[f.id,f]));
+        for(const id of d.fe) clientFood.delete(id);
+        for(const f of d.fn) clientFood.set(f.id,f);}
+      else if(d.t==="dead") showToast("EATEN!");
+      else if(d.t==="full"){settle();$("err").textContent="that game is full (10 players)";}
+    });
+    conn.on("close",()=>{if(!running)return;showToast("HOST LEFT");setTimeout(()=>location.reload(),1800);});
+  });
+}
+
+/* ================= INPUT ================= */
+function pollInput(){
+  if(joy){ input.dx=joy.dx; input.dy=joy.dy; return; }
+  // gamepad: left stick steer, A=split, B/X/Y=merge
+  const gps=navigator.getGamepads?navigator.getGamepads():[];
+  const gp=gps&&[...gps].find(g=>g&&g.connected);
+  if(gp){
+    if(!padOn){padOn=true;$("pad").style.display="block";}
+    const dz=v=>Math.abs(v)<0.15?0:v;
+    let ax=dz(gp.axes[0]||0), ay=dz(gp.axes[1]||0);
+    if(!ax&&!ay){ax=dz(gp.axes[2]||0); ay=dz(gp.axes[3]||0);}  // non-standard mappings
+    if(!ax&&!ay){                                              // d-pad fallback (12-15)
+      const bp=i=>!!(gp.buttons[i]&&gp.buttons[i].pressed);
+      ax=(bp(15)?1:0)-(bp(14)?1:0); ay=(bp(13)?1:0)-(bp(12)?1:0);
+    }
+    if(ax||ay){input.dx=clamp(ax,-1,1);input.dy=clamp(ay,-1,1);}
+    else {input.dx=0;input.dy=0;}
+    const edge=(i)=>{const now=!!(gp.buttons[i]&&gp.buttons[i].pressed);
+      const was=!!padPrev[i]; padPrev[i]=now; return now&&!was;};
+    if(edge(0)) queueSplit();
+    if(edge(1)||edge(2)||edge(3)) queueMerge();
+  }else if(padOn){padOn=false;$("pad").style.display="none";}
+}
+
+cv.addEventListener("pointerdown",e=>{
+  joy={ax:e.clientX,ay:e.clientY,dx:0,dy:0};
+});
+/* --- iOS Safari zoom prevention (it ignores user-scalable=no) --- */
+for(const ev of ["gesturestart","gesturechange","gestureend"])
+  document.addEventListener(ev,e=>e.preventDefault(),{passive:false});
+document.addEventListener("touchmove",e=>{
+  if(e.touches.length>1) e.preventDefault();        // pinch
+},{passive:false});
+let lastTap=0;
+document.addEventListener("touchend",e=>{
+  if(!running) return;                              // keep menu taps/clicks working
+  const now=Date.now();
+  if(now-lastTap<300) e.preventDefault();           // double-tap zoom
+  lastTap=now;
+},{passive:false});
+cv.addEventListener("pointermove",e=>{
+  if(!joy) return;
+  joy.dx=clamp((e.clientX-joy.ax)/55,-1,1);
+  joy.dy=clamp((e.clientY-joy.ay)/55,-1,1);
+});
+const joyEnd=()=>{joy=null;input.dx=0;input.dy=0;};
+cv.addEventListener("pointerup",joyEnd);
+cv.addEventListener("pointercancel",joyEnd);   // Android cancels touches often
+cv.addEventListener("pointerleave",joyEnd);
+cv.addEventListener("pointercancel",joyEnd);
+addEventListener("keydown",e=>{
+  if(e.code==="Space")queueSplit();
+  if(e.code==="KeyE")queueMerge();});
+const hasTouch=("ontouchstart" in window)||navigator.maxTouchPoints>0;
+addEventListener("mousemove",e=>{        // desktop testing only
+  if(joy||hasTouch) return;
+  input.dx=clamp((e.clientX-innerWidth/2)/(innerWidth/4),-1,1);
+  input.dy=clamp((e.clientY-innerHeight/2)/(innerHeight/4),-1,1);
+});
+function queueSplit(){
+  if(!running) return;
+  if(isHost) splitQueued=true;
+  else if(conns[0]&&conns[0].open) conns[0].send({t:"sp"});
+}
+function queueMerge(){
+  if(!running) return;
+  if(isHost) mergeQueued=true;
+  else if(conns[0]&&conns[0].open) conns[0].send({t:"mg"});
+}
+for(const [id,fn] of [["splitBtn",queueSplit],["mergeBtn",queueMerge]]){
+  $(id).addEventListener("pointerdown",e=>{e.preventDefault();e.stopPropagation();fn();});
+}
+
+/* ================= RENDER ================= */
+const STARS=(()=>{let s=42;const rr=()=>((s=s*16807%2147483647)/2147483647);
+  const a=[];for(let i=0;i<1400;i++)a.push([rr()*WORLD_BASE,rr()*WORLD_BASE,rr()<0.85?2:4]);return a;})();
+function view(){
+  // returns [players-like list, myCells] for rendering (host: live, client: interpolated)
+  if(isHost) return players.map(p=>({n:p.name,h:p.hue,i:p.id,s:p.score,b:p.isBot?1:0,k:p.skin,
+    c:p.cells.map(c=>[c.x,c.y,c.m,c.mt])}));
+  if(!snapCur) return [];
+  const t=snapPrev?clamp(snapT*SNAP_HZ,0,1):1, out=[];
+  for(const p of snapCur.p){
+    const meta=clientRoster.get(p.i)||{n:"?",h:0,b:1,k:""};
+    const q=snapPrev&&snapPrev.p.find(x=>x.i===p.i);
+    const c=(q&&q.c.length===p.c.length)
+      ? p.c.map((c,k)=>[lerp(q.c[k][0],c[0],t),lerp(q.c[k][1],c[1],t),lerp(q.c[k][2],c[2],t),c[3]])
+      : p.c;
+    out.push({i:p.i,s:p.s,n:meta.n,h:meta.h,b:meta.b,k:meta.k,c});
+  }
+  return out;
+}
+
+function draw(dt){
+  const ps=view();
+  const me=ps.find(p=>p.i===myId);
+  // camera
+  if(me&&me.c.length){
+    let mx=0,my=0,mm=0,tr=0,minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+    for(const c of me.c){mx+=c[0]*c[2];my+=c[1]*c[2];mm+=c[2];
+      const r=radius(c[2]);tr+=r;
+      minX=Math.min(minX,c[0]-r);maxX=Math.max(maxX,c[0]+r);
+      minY=Math.min(minY,c[1]-r);maxY=Math.max(maxY,c[1]+r);}
+    mx/=mm;my/=mm;
+    cam.x=mx; cam.y=my;                       // hard-lock: blob always dead-center
+    const span=clamp(tr*14,650,2400);          // world units visible on short screen axis
+    // widen further if split pieces would leave the frame (centroid stays centered)
+    const spanX=2*Math.max(mx-minX,maxX-mx)+260;
+    const spanY=2*Math.max(my-minY,maxY-my)+260;
+    const tz=Math.min(Math.min(innerWidth,innerHeight)/span,
+                      innerWidth/spanX, innerHeight/spanY);
+    cam.z=lerp(cam.z,tz,1-Math.pow(tz<cam.z?0.02:0.1,dt)); // zoom out fast, zoom in gently
+  }
+  const W=cv.width,H=cv.height,z=cam.z*DPR;
+  // nebula backdrop
+  const bg=ctx.createRadialGradient(W*0.3,H*0.25,0,W*0.5,H*0.5,Math.max(W,H));
+  bg.addColorStop(0,"#141A3B");bg.addColorStop(0.45,"#0C0A26");bg.addColorStop(1,"#04060F");
+  ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+  ctx.save();
+  ctx.translate(W/2,H/2);ctx.scale(z,z);ctx.translate(-cam.x,-cam.y);
+  const vw=W/z,vh=H/z,x0=cam.x-vw/2,y0=cam.y-vh/2;
+  // starfield (world-anchored, deterministic, tiled so it still covers an expanded arena)
+  const starA=clamp((cam.z-0.15)*1.8,0.05,0.45);   // fade stars as you zoom out
+  ctx.fillStyle=`rgba(200,218,255,${starA})`;
+  const ss=Math.min(1/cam.z,5);                      // cap star size
+  const tx0=Math.floor(x0/WORLD_BASE), tx1=Math.floor((x0+vw)/WORLD_BASE);
+  const ty0=Math.floor(y0/WORLD_BASE), ty1=Math.floor((y0+vh)/WORLD_BASE);
+  for(let ty=ty0;ty<=ty1;ty++)for(let tx=tx0;tx<=tx1;tx++){
+    const ox=tx*WORLD_BASE, oy=ty*WORLD_BASE;
+    for(const s of STARS){
+      const sx=s[0]+ox, sy=s[1]+oy;
+      if(sx<x0-8||sx>x0+vw+8||sy<y0-8||sy>y0+vh+8) continue;
+      ctx.fillRect(sx,sy,s[2]*ss,s[2]*ss);
+    }
+  }
+  // grid
+  ctx.strokeStyle="rgba(30,48,90,.5)";ctx.lineWidth=1/cam.z;
+  ctx.beginPath();
+  for(let x=Math.floor(x0/100)*100;x<x0+vw;x+=100){ctx.moveTo(x,y0);ctx.lineTo(x,y0+vh);}
+  for(let y=Math.floor(y0/100)*100;y<y0+vh;y+=100){ctx.moveTo(x0,y);ctx.lineTo(x0+vw,y);}
+  ctx.stroke();
+  // world edge
+  ctx.strokeStyle="rgba(150,170,255,.55)";ctx.lineWidth=6/cam.z;
+  ctx.shadowColor="rgba(150,170,255,.8)";ctx.shadowBlur=30;
+  ctx.strokeRect(0,0,WORLD,WORLD);ctx.shadowBlur=0;
+  // food — pellets are visually identical (hidden +1/+2/-1); drain pickups get a purple tint so rivals can spot them
+  const fsrc=isHost?food:clientFood;
+  const pulse=1+Math.sin(performance.now()/700)*0.08;
+  for(const f of fsrc.values()){
+    if(f.x<x0-20||f.x>x0+vw+20||f.y<y0-20||f.y>y0+vh+20) continue;
+    const fr=Math.max(7,5/cam.z)*(f.owner?1.3:1);     // pellets never shrink below ~5px on screen
+    ctx.beginPath();ctx.arc(f.x,f.y,fr*pulse,0,7);
+    ctx.fillStyle=f.owner?"rgba(183,139,255,.85)":"rgba(220,238,255,.85)";
+    ctx.shadowColor=f.owner?"rgba(183,139,255,.7)":"rgba(220,238,255,.55)";
+    ctx.shadowBlur=6;ctx.fill();ctx.shadowBlur=0;
+  }
+  // viruses — green (engulf-gated reward/risk), yellow (universal hazard), red (top-3 only, harsher)
+  const VIRUS_COLORS={g:{fill:"rgba(110,255,94,.28)",line:"#6EFF5E"},
+                       y:{fill:"rgba(255,210,63,.28)",line:"#FFD23F"},
+                       r:{fill:"rgba(255,94,91,.30)",line:"#FF5E5B"}};
+  const vs=isHost?viruses.map(v=>[v.x,v.y,v.type]):clientViruses;
+  const rV=radius(VIRUS_MASS);
+  for(const v of vs){
+    if(v[0]<x0-rV||v[0]>x0+vw+rV||v[1]<y0-rV||v[1]>y0+vh+rV) continue;
+    const col=VIRUS_COLORS[v[2]]||VIRUS_COLORS.g;
+    ctx.beginPath();
+    for(let i=0;i<=36;i++){
+      const a=i/36*Math.PI*2, rr=rV*(i%2?0.88:1.0);
+      const px=v[0]+Math.cos(a)*rr, py=v[1]+Math.sin(a)*rr;
+      i?ctx.lineTo(px,py):ctx.moveTo(px,py);
+    }
+    ctx.closePath();
+    ctx.fillStyle=col.fill;ctx.fill();
+    ctx.lineWidth=3/cam.z+2;ctx.strokeStyle=col.line;ctx.stroke();
+  }
+  // cells (small first so big draw on top)
+  const all=[];
+  for(const p of ps)for(const c of p.c)all.push({p,c});
+  all.sort((a,b)=>a.c[2]-b.c[2]);
+  const t=performance.now()/1000;
+  for(const {p,c} of all){
+    const [x,y,m]=c,r=radius(m);
+    if(x<x0-r||x>x0+vw+r||y<y0-r||y>y0+vh+r) continue;
+    const wob=1+Math.sin(t*3+x*0.01)*0.015;
+    const g=ctx.createRadialGradient(x,y,r*0.2,x,y,r*wob);
+    g.addColorStop(0,`hsl(${p.h} 85% 62%)`);
+    g.addColorStop(1,`hsl(${p.h} 90% 40%)`);
+    if(!p.b){ctx.shadowColor=p.i===myId?"rgba(127,216,255,.95)":`hsla(${p.h} 95% 70% / .85)`;
+      ctx.shadowBlur=p.i===myId?34:24;}
+    ctx.fillStyle=g;
+    ctx.beginPath();ctx.arc(x,y,r*wob,0,7);ctx.fill();
+    ctx.shadowBlur=0;
+    const sk=skinImg(p.k);
+    if(sk){ctx.save();ctx.beginPath();ctx.arc(x,y,r*wob,0,7);ctx.clip();
+      ctx.drawImage(sk,x-r*wob,y-r*wob,r*wob*2,r*wob*2);ctx.restore();}
+    ctx.lineWidth=Math.max(2,r*0.07);
+    ctx.strokeStyle=`hsl(${p.h} 95% ${p.i===myId?78:30}%)`;
+    ctx.stroke();
+    // nucleus (plain blobs only)
+    if(!sk){ctx.fillStyle=`hsla(${p.h} 90% 80% / .5)`;
+      ctx.beginPath();ctx.arc(x,y,r*0.28,0,7);ctx.fill();}
+    if(r*cam.z>14){
+      ctx.fillStyle="rgba(255,255,255,.92)";
+      ctx.font=`700 ${Math.max(11,r*0.34)}px ui-rounded,sans-serif`;
+      ctx.textAlign="center";ctx.textBaseline="middle";
+      if(sk){ctx.lineWidth=Math.max(2,r*0.05);ctx.strokeStyle="rgba(0,0,0,.55)";
+        ctx.strokeText(p.n,x,y);}
+      ctx.fillText(p.n,x,y);
+      if(p.i===myId&&c[3]>0.05){
+        ctx.fillStyle="rgba(255,255,255,.7)";
+        ctx.font=`700 ${Math.max(10,r*0.26)}px ui-rounded,sans-serif`;
+        ctx.fillText(Math.ceil(c[3]),x,y+r*0.45);
+      }
+    }
+  }
+  ctx.restore();
+  // joystick visual
+  if(joy){
+    ctx.strokeStyle="rgba(220,233,238,.35)";ctx.lineWidth=2*DPR;
+    ctx.beginPath();ctx.arc(joy.ax*DPR,joy.ay*DPR,55*DPR,0,7);ctx.stroke();
+    ctx.fillStyle="rgba(127,216,255,.55)";
+    ctx.beginPath();ctx.arc((joy.ax+joy.dx*55)*DPR,(joy.ay+joy.dy*55)*DPR,20*DPR,0,7);ctx.fill();
+  }
+  // HUD
+  const esc=s=>String(s).replace(/[<>&"']/g,"");
+  const sorted=[...ps].sort((a,b)=>b.s-a.s);
+  $("board").innerHTML=sorted.map((p,i)=>
+    `<div class="${p.i===myId?'me':''}"><span>${i+1}. ${esc(p.n)}</span><span>${p.s}</span></div>`).join("");
+  if(me)$("score").textContent="mass "+Math.floor(me.c.reduce((s,c)=>s+c[2],0));
+}
+
+/* ================= LOOP ================= */
+let tickTimer=null,tickLast=0;
+function netTick(){                       // runs on setInterval: survives backgrounded tabs
+  if(!running)return;
+  const now=performance.now();
+  const dt=Math.min(0.05,(now-tickLast)/1000||0.016);tickLast=now;
+  try{
+    pollInput();
+    if(isHost){
+      simulate(dt);
+      netTick._acc=(netTick._acc||0)+dt;
+      if(netTick._acc>=1/SNAP_HZ){netTick._acc=0;broadcast();}
+    }else{
+      netTick._iacc=(netTick._iacc||0)+dt;
+      if(netTick._iacc>=1/SNAP_HZ){netTick._iacc=0;
+        safeSend(conns[0],{t:"in",x:input.dx,y:input.dy});}
+    }
+  }catch(err){console.error("tick error",err);}   // one bad frame must not kill the game
+}
+function loop(ts){
+  if(!running)return;
+  const dt=Math.min(0.05,(ts-lastT)/1000||0.016);lastT=ts;
+  if(!isHost) snapT+=dt;
+  draw(dt);
+  requestAnimationFrame(loop);
+}
+
+function startPlay(code){
+  $("menu").style.display="none";$("hud").style.display="block";
+  $("roomTag").textContent=code;
+  running=true;lastT=tickLast=performance.now();
+  tickTimer=setInterval(netTick,1000/60);
+  requestAnimationFrame(loop);
+}
+
+function showToast(msg){const el=$("toast");el.textContent=msg;el.style.opacity=1;
+  setTimeout(()=>el.style.opacity=0,1600);}
+
+/* ================= SKINS ================= */
+const SKIN_DATA={us:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M256 0h256v64l-32 32 32 32v64l-32 32 32 32v64l-32 32 32 32v64l-256 32L0 448v-64l32-32-32-32v-64z\"/><path fill=\"#d80027\" d=\"M224 64h288v64H224Zm0 128h288v64H256ZM0 320h512v64H0Zm0 128h512v64H0Z\"/><path fill=\"#0052b4\" d=\"M0 0h256v256H0Z\"/><path fill=\"#eee\" d=\"m187 243 57-41h-70l57 41-22-67zm-81 0 57-41H93l57 41-22-67zm-81 0 57-41H12l57 41-22-67zm162-81 57-41h-70l57 41-22-67zm-81 0 57-41H93l57 41-22-67zm-81 0 57-41H12l57 41-22-67Zm162-82 57-41h-70l57 41-22-67Zm-81 0 57-41H93l57 41-22-67zm-81 0 57-41H12l57 41-22-67Z\"/></g></svg>",br:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#6da544\" d=\"M0 0h512v512H0z\"/><path fill=\"#ffda44\" d=\"M256 100.2 467.5 256 256 411.8 44.5 256z\"/><path fill=\"#eee\" d=\"M174.2 221a87 87 0 0 0-7.2 36.3l162 49.8a88.5 88.5 0 0 0 14.4-34c-40.6-65.3-119.7-80.3-169.1-52z\"/><path fill=\"#0052b4\" d=\"M255.7 167a89 89 0 0 0-41.9 10.6 89 89 0 0 0-39.6 43.4 181.7 181.7 0 0 1 169.1 52.2 89 89 0 0 0-9-59.4 89 89 0 0 0-78.6-46.8zM212 250.5a149 149 0 0 0-45 6.8 89 89 0 0 0 10.5 40.9 89 89 0 0 0 120.6 36.2 89 89 0 0 0 30.7-27.3A151 151 0 0 0 212 250.5z\"/></g></svg>",gb:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"m0 0 8 22-8 23v23l32 54-32 54v32l32 48-32 48v32l32 54-32 54v68l22-8 23 8h23l54-32 54 32h32l48-32 48 32h32l54-32 54 32h68l-8-22 8-23v-23l-32-54 32-54v-32l-32-48 32-48v-32l-32-54 32-54V0l-22 8-23-8h-23l-54 32-54-32h-32l-48 32-48-32h-32l-54 32L68 0H0z\"/><path fill=\"#0052b4\" d=\"M336 0v108L444 0Zm176 68L404 176h108zM0 176h108L0 68ZM68 0l108 108V0Zm108 512V404L68 512ZM0 444l108-108H0Zm512-108H404l108 108Zm-68 176L336 404v108z\"/><path fill=\"#d80027\" d=\"M0 0v45l131 131h45L0 0zm208 0v208H0v96h208v208h96V304h208v-96H304V0h-96zm259 0L336 131v45L512 0h-45zM176 336 0 512h45l131-131v-45zm160 0 176 176v-45L381 336h-45z\"/></g></svg>",fr:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M167 0h178l25.9 252.3L345 512H167l-29.8-253.4z\"/><path fill=\"#0052b4\" d=\"M0 0h167v512H0z\"/><path fill=\"#d80027\" d=\"M345 0h167v512H345z\"/></g></svg>",de:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#ffda44\" d=\"m0 345 256.7-25.5L512 345v167H0z\"/><path fill=\"#d80027\" d=\"m0 167 255-23 257 23v178H0z\"/><path fill=\"#333\" d=\"M0 0h512v167H0z\"/></g></svg>",es:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#ffda44\" d=\"m0 128 256-32 256 32v256l-256 32L0 384Z\"/><path fill=\"#eee\" d=\"M196 168q-11 1-15 11l-5-1q-15 1-16 16c-1 15 7 16 16 16q11 0 15-11a16 16 0 0 0 17-4 16 16 0 0 0 17 4 16 16 0 1 0 10-20 16 16 0 0 0-27-5q-4-6-12-6m0 8q8 1 8 8 0 8-8 8-7 0-8-8 1-7 8-8m24 0q8 1 8 8 0 8-8 8-7 0-8-8 1-7 8-8m-44 10 4 1 4 8q-1 7-8 7-9 0-8-8 1-7 8-8m64 0q8 1 8 8 0 8-8 8-7 0-8-7l4-8zm-112 38v80h16v-80zm80 0v40c-26 0-48 14-48 32s22 32 48 32 48-14 48-32v-72zm64 0v80h16v-80z\"/><path fill=\"#ff9811\" d=\"M200 160h16v32h-16z\"/><path fill=\"#d80027\" d=\"M0 0v128h512V0zm208 184c-22 0-40 11-40 24l8 8h64l8-8c0-13-18-24-40-24m-72 8a8 8 0 0 0-8 8v8a8 8 0 1 0 16 0v-8a8 8 0 0 0-8-8m144 0a8 8 0 0 0-8 8v8a8 8 0 1 0 16 0v-8a8 8 0 0 0-8-8m-120 32v24h-38a4 4 0 0 0-4 4 4 4 0 0 0 4 4h38v40a24 24 0 0 0 24 24 24 24 0 0 0 24-24 24 24 0 0 0 24 24 24 24 0 0 0 24-24v-24h-48v-48zm72 8a10 10 0 0 0-10 10v12a10 10 0 1 0 20 0v-12a10 10 0 0 0-10-10m24 16v8h38a4 4 0 0 0 4-4 4 4 0 0 0-4-4zm-134 24a4 4 0 0 0-4 4 4 4 0 0 0 4 4h28a4 4 0 0 0 4-4 4 4 0 0 0-4-4zm144 0a4 4 0 0 0-4 4 4 4 0 0 0 4 4h28a4 4 0 0 0 4-4 4 4 0 0 0-4-4zM0 384v128h512V384z\"/><path fill=\"#ffda44\" d=\"M186 196a6 6 0 0 0-6 6 6 6 0 0 0 6 6 6 6 0 0 0 6-6 6 6 0 0 0-6-6m22 0a6 6 0 0 0-6 6 6 6 0 0 0 6 6 6 6 0 0 0 6-6 6 6 0 0 0-6-6m22 0a6 6 0 0 0-6 6 6 6 0 0 0 6 6 6 6 0 0 0 6-6 6 6 0 0 0-6-6\"/><path fill=\"#ff9811\" d=\"M128 208a8 8 0 1 0 0 16h16a8 8 0 1 0 0-16zm144 0a8 8 0 1 0 0 16h16a8 8 0 1 0 0-16zm-96 8v8h64v-8zm-8 16v8h8v16h-8v8h32v-8h-8v-16h8v-8zm-8 40v24q1 12 9 19v-43zm19 0v47h10v-47zm20 0v43q9-7 9-19v-24zm-71 32a8 8 0 1 0 0 16h16a8 8 0 1 0 0-16zm144 0a8 8 0 1 0 0 16h16a8 8 0 1 0 0-16z\"/><path fill=\"#338af3\" d=\"M208 256a16 16 0 0 0-16 16 16 16 0 0 0 16 16 16 16 0 0 0 16-16 16 16 0 0 0-16-16m-80 64a8 8 0 1 0 0 16h16a8 8 0 1 0 0-16zm144 0a8 8 0 1 0 0 16h16a8 8 0 1 0 0-16z\"/></g></svg>",it:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M167 0h178l25.9 252.3L345 512H167l-29.8-253.4z\"/><path fill=\"#6da544\" d=\"M0 0h167v512H0z\"/><path fill=\"#d80027\" d=\"M345 0h167v512H345z\"/></g></svg>",pt:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#6da544\" d=\"M0 512h167l37.9-260.3L167 0H0z\"/><path fill=\"#d80027\" d=\"M512 0H167v512h345z\"/><circle cx=\"167\" cy=\"256\" r=\"89\" fill=\"#ffda44\"/><path fill=\"#d80027\" d=\"M116.9 211.5V267a50 50 0 1 0 100.1 0v-55.6H117z\"/><path fill=\"#eee\" d=\"M167 283.8c-9.2 0-16.7-7.5-16.7-16.7V245h33.4v22c0 9.2-7.5 16.7-16.7 16.7z\"/></g></svg>",nl:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"m0 167 253.8-19.3L512 167v178l-254.9 32.3L0 345z\"/><path fill=\"#a2001d\" d=\"M0 0h512v167H0z\"/><path fill=\"#0052b4\" d=\"M0 345h512v167H0z\"/></g></svg>",se:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#0052b4\" d=\"M0 0h133.6l35.3 16.7L200.3 0H512v222.6l-22.6 31.7 22.6 35.1V512H200.3l-32-19.8-34.7 19.8H0V289.4l22.1-33.3L0 222.6z\"/><path fill=\"#ffda44\" d=\"M133.6 0v222.6H0v66.8h133.6V512h66.7V289.4H512v-66.8H200.3V0z\"/></g></svg>",no:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h100.2l66.1 53.5L233.7 0H512v189.3L466.3 257l45.7 65.8V512H233.7l-68-50.7-65.5 50.7H0V322.8l51.4-68.5-51.4-65z\"/><path fill=\"#eee\" d=\"M100.2 0v189.3H0v33.4l24.6 33L0 289.5v33.4h100.2V512h33.4l30.6-26.3 36.1 26.3h33.4V322.8H512v-33.4l-24.6-33.7 24.6-33v-33.4H233.7V0h-33.4l-33.8 25.3L133.6 0z\"/><path fill=\"#0052b4\" d=\"M133.6 0v222.7H0v66.7h133.6V512h66.7V289.4H512v-66.7H200.3V0z\"/></g></svg>",dk:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h133.6l32.7 20.3 34-20.3H512v222.6L491.4 256l20.6 33.4V512H200.3l-31.7-20.4-35 20.4H0V289.4l29.4-33L0 222.7z\"/><path fill=\"#eee\" d=\"M133.6 0v222.6H0v66.8h133.6V512h66.7V289.4H512v-66.8H200.3V0h-66.7z\"/></g></svg>",fi:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M0 0h133.6l35.3 16.7L200.3 0H512v222.6l-22.6 31.7 22.6 35.1V512H200.3l-32-19.8-34.7 19.8H0V289.4l22.1-33.3L0 222.6z\"/><path fill=\"#0052b4\" d=\"M133.6 0v222.6H0v66.8h133.6V512h66.7V289.4H512v-66.8H200.3V0h-66.7z\"/></g></svg>",pl:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"m0 256 256.4-44.3L512 256v256H0z\"/><path fill=\"#eee\" d=\"M0 0h512v256H0z\"/></g></svg>",ua:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#ffda44\" d=\"m0 256 258-39.4L512 256v256H0z\"/><path fill=\"#338af3\" d=\"M0 0h512v256H0z\"/></g></svg>",tr:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h512v512H0z\"/><path fill=\"#eee\" d=\"M208 115a141 141 0 1 0 106 242q-25 13-54 13a114 114 0 1 1 54-215 141 141 0 0 0-106-40m142 67v56l-54 18 54 17v57l33-46 54 18-33-46 33-46-54 18z\"/></g></svg>",gr:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#0052b4\" d=\"M0 0h99l29 32 28-32h356v57l-32 28 32 29v57l-32 28 32 29v57l-32 28 32 28v57l-32 29 32 28v57H0v-57l32-28-32-29v-56l32-29-32-28V171l32-29-32-28Z\"/><path fill=\"#eee\" d=\"M99 0v114H0v57h99v114H0v57h512v-57H156V171h100v-57H156V0Zm157 57v57h256V57Zm0 114v57h256v-57ZM0 398v57h512v-57z\"/></g></svg>",jp:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M0 0h512v512H0z\"/><circle cx=\"256\" cy=\"256\" r=\"111.3\" fill=\"#d80027\"/></g></svg>",kr:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M0 0h512v512H0Z\"/><path fill=\"#333\" d=\"m350 335 24-24 16 16-24 23zm-39 39 24-24 15 16-23 24zm87 8 23-24 16 16-24 24zm-40 39 24-23 16 15-24 24Zm16-63 24-23 15 15-23 24zm-39 40 23-24 16 16-24 23zm63-221-63-63 15-15 64 63zm-63-15-24-24 16-16 23 24zm39 39-24-24 16-15 24 23zm8-87-24-23 16-16 24 24Zm39 40-23-24 15-16 24 24ZM91 358l63 63-16 16-63-63zm63 16 23 24-15 15-24-23zm-40-39 24 23-16 16-23-24zm24-24 63 63-16 16-63-63zm16-220-63 63-16-16 63-63zm23 23-63 63-15-16 63-63zm24 24-63 63-16-16 63-63z\"/><path fill=\"#d80027\" d=\"M319 319 193 193a89 89 0 1 1 126 126z\"/><path fill=\"#0052b4\" d=\"M319 319a89 89 0 1 1-126-126z\"/><circle cx=\"224.5\" cy=\"224.5\" r=\"44.5\" fill=\"#d80027\"/><circle cx=\"287.5\" cy=\"287.5\" r=\"44.5\" fill=\"#0052b4\"/></g></svg>",cn:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h512v512H0z\"/><path fill=\"#ffda44\" d=\"m140.1 155.8 22.1 68h71.5l-57.8 42.1 22.1 68-57.9-42-57.9 42 22.2-68-57.9-42.1H118zm163.4 240.7-16.9-20.8-25 9.7 14.5-22.5-16.9-20.9 25.9 6.9 14.6-22.5 1.4 26.8 26 6.9-25.1 9.6zm33.6-61 8-25.6-21.9-15.5 26.8-.4 7.9-25.6 8.7 25.4 26.8-.3-21.5 16 8.6 25.4-21.9-15.5zm45.3-147.6L370.6 212l19.2 18.7-26.5-3.8-11.8 24-4.6-26.4-26.6-3.8 23.8-12.5-4.6-26.5 19.2 18.7zm-78.2-73-2 26.7 24.9 10.1-26.1 6.4-1.9 26.8-14.1-22.8-26.1 6.4 17.3-20.5-14.2-22.7 24.9 10.1z\"/></g></svg>",in:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"m0 160 256-32 256 32v192l-256 32L0 352z\"/><path fill=\"#ff9811\" d=\"M0 0h512v160H0Z\"/><path fill=\"#6da544\" d=\"M0 352h512v160H0Z\"/><circle cx=\"256\" cy=\"256\" r=\"72\" fill=\"#0052b4\"/><circle cx=\"256\" cy=\"256\" r=\"48\" fill=\"#eee\"/><circle cx=\"256\" cy=\"256\" r=\"24\" fill=\"#0052b4\"/></g></svg>",id:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"m0 256 249.6-41.3L512 256v256H0z\"/><path fill=\"#d80027\" d=\"M0 0h512v256H0z\"/></g></svg>",th:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h512v89l-79.2 163.7L512 423v89H0v-89l82.7-169.6L0 89z\"/><path fill=\"#eee\" d=\"M0 89h512v78l-42.6 91.2L512 345v78H0v-78l40-92.5L0 167z\"/><path fill=\"#0052b4\" d=\"M0 167h512v178H0z\"/></g></svg>",vn:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h512v512H0Z\"/><path fill=\"#ffda44\" d=\"m176 378 208-150H128l208 150-80-244Z\"/></g></svg>",ph:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#0052b4\" d=\"M0 0h512v256l-265 45.2z\"/><path fill=\"#d80027\" d=\"M210 256h302v256H0z\"/><path fill=\"#eee\" d=\"M0 0v512l256-256z\"/><path fill=\"#ffda44\" d=\"M175.3 256 144 241.3l16.7-30.3-34 6.5-4.3-34.3-23.6 25.2L75 183.2l-4.3 34.3-34-6.5 16.7 30.3L22.3 256l31.2 14.7L37 301l34-6.5 4.2 34.3 23.7-25.2 23.6 25.2 4.3-34.3 34 6.5-16.7-30.3zm-107-155.8 10.4 14.5 17-5.4-10.6 14.4 10.4 14.5-17-5.6L68 147l.2-17.9-17-5.6 17-5.4zm0 264.8 10.4 14.6 17-5.4-10.6 14.3 10.4 14.6-17-5.7L68 411.8l.2-17.9-17-5.6 17-5.4zm148.4-132.4L206.3 247l-17-5.4 10.5 14.4-10.4 14.6 17-5.7 10.6 14.4-.1-17.9 17-5.6-17.1-5.4z\"/></g></svg>",au:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#0052b4\" d=\"M0 0h512v512H0z\"/><path fill=\"#eee\" d=\"m154 300 14 30 32-8-14 30 25 20-32 7 1 33-26-21-26 21 1-33-33-7 26-20-14-30 32 8zm222-27h47l-38 27 15-44 14 44zm7-162 7 15 16-4-7 15 12 10-15 3v17l-13-11-13 11v-17l-15-3 12-10-7-15 16 4zm57 67 7 15 16-4-7 15 12 10-15 3v16l-13-10-13 11v-17l-15-3 12-10-7-15 16 4zm-122 22 7 15 16-4-7 15 12 10-15 3v16l-13-10-13 11v-17l-15-3 12-10-7-15 16 4zm65 156 7 15 16-4-7 15 12 10-15 3v17l-13-11-13 11v-17l-15-3 12-10-7-15 16 4zM0 0v32l32 32L0 96v160h32l32-32 32 32h32v-83l83 83h45l-8-16 8-15v-14l-83-83h83V96l-32-32 32-32V0H96L64 32 32 0Z\"/><path fill=\"#d80027\" d=\"M32 0v32H0v64h32v160h64V96h160V32H96V0Zm96 128 128 128v-31l-97-97z\"/></g></svg>",nz:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#0052b4\" d=\"M256 0h256v512H0V256Z\"/><path fill=\"#eee\" d=\"M0 0v32l32 32L0 96v160h32l32-32 32 32h32v-83l83 83h45l-8-16 8-15v-14l-83-83h83V96l-32-32 32-32V0H96L64 32 32 0Zm382 92-11 35h-37l30 21-12 35 30-22 30 22-12-35 30-21h-37l-11-35Zm61 72-11 35h-37l30 21-11 35 29-21 30 21-12-35 30-21h-37Zm-123 10-11 35h-37l30 22-11 35 29-22 30 22-11-35 29-22h-36zm59 130-11 35h-37l30 21-11 35 29-21 30 21-11-35 29-21h-36z\"/><path fill=\"#d80027\" d=\"M32 0v32H0v64h32v160h64V96h160V32H96V0Zm96 128 128 128v-31l-97-97zm251 201-5 18h-19l15 10-6 18 15-11 15 11-5-18 14-10h-18Zm-59-129-5 17h-19l15 11-6 17 15-11 15 11-6-17 15-11h-18l-6-17zm123-11-6 18h-18l15 11-6 17 15-11 15 11-6-17 15-11h-18l-6-18zm-61-72-6 17h-18l15 11-6 17 15-10 15 10-6-17 15-11h-18z\"/></g></svg>",ca:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0v512h144l112-64 112 64h144V0H368L256 64 144 0Z\"/><path fill=\"#eee\" d=\"M144 0h224v512H144Z\"/><path fill=\"#d80027\" d=\"m301 289 44-22-22-11v-22l-45 22 23-44h-23l-22-34-22 33h-23l23 45-45-22v22l-22 11 45 22-12 23h45v33h22v-33h45z\"/></g></svg>",mx:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M144 0h223l33 256-33 256H144l-32-256z\"/><path fill=\"#d80027\" d=\"M368 0h144v512H368z\"/><path fill=\"#751a46\" d=\"M256 174c22 11 12 33 11 34l-2-4c-4-15-13-33-31-18v11q10 1 11 11-11 12-4 26l4 8-13 23 29-7 18 18v-11l11 11 23-11-35-21-2-13c22-2 34 4 51 29 9-83-45-86-64-86Z\"/><path fill=\"#6da544\" d=\"M209 183q-5 4-4 12 1 11 10 15c3 2 8 0 10 3 3 3-2 5-4 6q-8 5-9 14 3 10 12 15c2 2 7 4 5 7q-4 2-9-2-12-6-19-19c-2-3-1-10-7-10-7 2-4 10-2 14q8 14 21 23 9 8 20 3 10-6 4-17c-3-6-11-8-14-14-2-3 2-4 4-6q8-4 9-11-2-13-14-15-6 1-7-6c-1-3 3-7 0-11q-2-3-6-1\"/><path fill=\"#496e2d\" d=\"M0 0v512h144V0zm164 235a5 5 0 0 0-5 5 97 97 0 0 0 194 0 5 5 0 0 0-5-5 5 5 0 0 0-5 5 87 87 0 1 1-174 0 5 5 0 0 0-5-5m35 25-4 1q-3 4 1 8 23 21 54 24v17h12v-17q31-3 54-24 4-4 1-8-4-3-8 0a78 78 0 0 1-106 0z\"/><path fill=\"#338af3\" d=\"M256 316q-21 0-40-13l6-9c20 13 48 13 68 0l7 9q-18 13-41 13\"/><rect width=\"34\" height=\"22\" x=\"239\" y=\"299\" fill=\"#ff9811\" rx=\"11\" ry=\"11\"/><path fill=\"#ffda44\" d=\"m234 186-12 11v11l18-9q4-3 1-7zm-62 79a10 10 0 0 0-10 10 10 10 0 0 0 10 10 10 10 0 0 0 10-10 10 10 0 0 0-10-10m169 0a10 10 0 0 0-10 10 10 10 0 0 0 10 10 10 10 0 0 0 10-10 10 10 0 0 0-10-10m-69 4-16 8v5l15-1 4-9zm-83 23a10 10 0 0 0-10 10 10 10 0 0 0 10 10 10 10 0 0 0 10-10 10 10 0 0 0-10-10m135 0a10 10 0 0 0-10 10 10 10 0 0 0 10 10 10 10 0 0 0 10-10 10 10 0 0 0-10-10m-108 21a10 10 0 0 0-10 10 10 10 0 0 0 10 10 10 10 0 0 0 10-10 10 10 0 0 0-10-10m81 0a10 10 0 0 0-10 10 10 10 0 0 0 10 10 10 10 0 0 0 10-10 10 10 0 0 0-10-10\"/></g></svg>",ar:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#338af3\" d=\"M0 0h512v144.7L488 256l24 111.3V512H0V367.3L26 256 0 144.7z\"/><path fill=\"#eee\" d=\"M0 144.7h512v222.6H0z\"/><path fill=\"#ffda44\" d=\"m332.4 256-31.2 14.7 16.7 30.3-34-6.5-4.2 34.3-23.7-25.2-23.6 25.2-4.3-34.3-34 6.5 16.6-30.3-31.2-14.7 31.3-14.7L194 211l34 6.5 4.3-34.3 23.6 25.2 23.6-25.2 4.4 34.3 34-6.5-16.7 30.3z\"/></g></svg>",cl:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"m0 256 254.5-51.3L512 256v256H0z\"/><path fill=\"#0052b4\" d=\"M0 0h256l52.7 132.8L256 256H0z\"/><path fill=\"#eee\" d=\"M256 0h256v256H256zM152.4 89l16.6 51h53.6l-43.4 31.6 16.6 51-43.4-31.5-43.4 31.5 16.6-51L82.2 140h53.6z\"/></g></svg>",co:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"m0 384 255.8-29.7L512 384v128H0z\"/><path fill=\"#0052b4\" d=\"m0 256 259.5-31L512 256v128H0z\"/><path fill=\"#ffda44\" d=\"M0 0h512v256H0z\"/></g></svg>",pe:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h167l86 41.2L345 0h167v512H345l-87.9-41.4L167 512H0z\"/><path fill=\"#eee\" d=\"M167 0h178v512H167z\"/></g></svg>",za:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"m0 0 192 256L0 512h47l465-189v-34l-32-33 32-33v-34L47 0Z\"/><path fill=\"#333\" d=\"M0 142v228l140-114z\"/><path fill=\"#ffda44\" d=\"M192 256 0 95v47l114 114L0 370v47z\"/><path fill=\"#6da544\" d=\"M512 223H223L0 0v94l161 162L0 418v94l223-223h289z\"/><path fill=\"#d80027\" d=\"M512 0H47l189 189h276z\"/><path fill=\"#0052b4\" d=\"M512 512H47l189-189h276z\"/></g></svg>",ng:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#6da544\" d=\"M0 0v512h160l96-64 96 64h160V0H352l-96 64-96-64Z\"/><path fill=\"#eee\" d=\"M160 0h192v512H160Z\"/></g></svg>",eg:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"m0 144 256-32 256 32v224l-256 32L0 368Z\"/><path fill=\"#d80027\" d=\"M0 0h512v144H0Z\"/><path fill=\"#333\" d=\"M0 368h512v144H0Z\"/><path fill=\"#ff9811\" d=\"M250 191c-8 0-17 4-22 14 5-3 16-1 16 13 0 4-2 8-5 10-8 0-14-14-29-14-10 0-19 7-19 17v69l46-7-14 27h66l-14-27 46 7v-69c0-10-9-17-19-17-15 0-21 14-29 14 8-23-7-37-23-37z\"/></g></svg>",ma:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h512v512H0z\"/><path fill=\"#496e2d\" d=\"M407.3 210H291.7L256 100.3 220.3 210H104.7l93.5 68-35.7 109.8L256 320l93.5 68-35.7-110zm-183 59.5 12.2-37.1h39l12.1 37.1-31.6 23-31.6-23zm44-59.4h-24.6l12.3-37.9zm38.3 45.7-7.7-23.4h39.9zM213 232.4l-7.7 23.4-32.2-23.4zm-8.3 97.3 12.3-38 20 14.5zm70.1-23.4 20-14.5 12.3 37.9z\"/></g></svg>",sa:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#496e2d\" d=\"M0 0h512v512H0Z\"/><path fill=\"#eee\" d=\"M336 356v16H128l24 24h184v16h16v-16h32v-24h-32v-16zM131.4 174v41.4h-15.8v-26.7H97.8q-6.3 0-10.8 2.3a15 15 0 0 0-6.7 6.4 22 22 0 0 0-2.3 10.5q0 6 2.3 10.3 2.3 4 6.7 6 4.5 2.1 10.8 2.1H173V174h-13v41.4h-15.8V174zm52.9 0v52.3h12.8V174zm55.3 0v41.4h-11v-31h-12.8v31h-9.3v10.9h45.9V174zm24.3 0v52.3h12.8V174zm77.8 0v41.4H326v-26.7h-17.8q-6.3 0-10.8 2.3a15 15 0 0 0-6.7 6.4 22 22 0 0 0-2.3 10.5q0 6 2.3 10.3 2.3 4 6.7 6 4.5 2.1 10.8 2.1h46.5V174zm24.2 0v52.3h12.8V174zm55.3 0v41.4h-11v-31h-12.8v31h-9.3v10.9h46V174ZM97.8 199.6h5v15.8h-5q-2.4 0-4-.4-1.5-.5-2.2-2a13 13 0 0 1-.8-5.1q0-3.7.8-5.4 1-1.8 2.5-2.3 1.5-.6 3.7-.6m210.3 0h5v15.8h-5q-2.4 0-4-.4-1.5-.5-2.2-2a13 13 0 0 1-.8-5.1q0-3.7.8-5.4 1-1.8 2.5-2.3 1.6-.6 3.7-.6M114.8 247v28.5h-10.9V257H91.6q-4.4 0-7.4 1.6-3 1.4-4.6 4.4t-1.6 7.2q0 4.3 1.6 7 1.5 2.9 4.6 4.3t7.4 1.4h51.7v-36h-8.8v28.5h-10.9V247Zm36.3 0v36h8.8v-36Zm39.7 0v35.8q0 1.5-.6 2.7t-2 2q-1.5.6-4 .7t-4.2-.7-2.4-2q-.9-1.3-.9-3.1l.2-2.8 1.5-10.8-8.7-1.1-1.2 8.4-.6 6.4q0 3.7 2 6.7a14 14 0 0 0 5.9 4.8q3.6 1.7 8.3 1.7 4.5 0 8-1.6 3.6-1.6 5.5-4.6 2-2.8 2-6.7V247Zm159.5 10a36 36 0 0 0-10 1.4 40 40 0 0 0-1.3 7.4 57 57 0 0 0 0 9.6h-11v-2a20 20 0 0 0-1.9-9.2q-1.8-3.6-5.4-5.3a20 20 0 0 0-8.7-1.8h-4.2v7.5h4.2q2.7 0 4.3.8 1.5.7 2.2 2.6.6 1.8.7 5.4v2h-12.7v7.6H434v-12.8q0-5-1.6-7.8-1.5-3-4.7-4.1-3.2-1.4-8-1.3a36 36 0 0 0-10 1.4 40 40 0 0 0-1.4 7.4 57 57 0 0 0 0 9.6h-10.9v-4.8q0-4.2-2-7.2t-5.5-4.6a18 18 0 0 0-7.9-1.7q-2.1 0-4.2.4l-4.3.8.7 7a48 48 0 0 1 6.7-.6q4 0 6 1.5 1.7 1.5 1.7 4.4v4.9h-23.9v-5.3q0-5-1.6-7.8-1.6-3-4.8-4.1-3-1.4-8-1.3m-131.7.1q-4.3 0-7.4 1.6-3 1.4-4.6 4.4t-1.6 7.2q0 4.3 1.6 7 1.6 2.9 4.6 4.3t7.4 1.4h3.5v1.6q0 2.3-1.5 3.4-1.4 1.2-4.7 1.2l-3-.2q-1.8 0-4.3-.4l-1.2 7a59 59 0 0 0 8.5 1q4.5 0 7.8-1.4 3.4-1.5 5.3-4.2a11 11 0 0 0 1.9-6.4V283h22.9a15 15 0 0 0 7.9-2q1 .6 2.2 1 2.3 1 4.7 1h13.9v-14l-.3-3.3-1.3-8.6-8.7 1.3a118 118 0 0 1 1.4 10.5v6.6h-5l-1.9-.4-.9-.5q.7-2.7.7-6.2v-8.6h-8.8v8.6q0 3-.4 4.6-.3 1.5-1 2a5 5 0 0 1-2.5.5h-3v-13h-9v13H231V257zm73.8 0v26.6q0 2.7-1 4-1 1.5-2.8 1.5h-2.8l-.2 7.3 3.1.2q3.8 0 6.6-1.7t4.3-4.6 1.6-6.7V257zm58 7.4q2.1 0 3.3.5t1.7 1.7q.4 1.3.4 3.4v5.4h-8a71 71 0 0 1 0-8.6l.2-2.3zm69.3 0q2.2 0 3.4.5t1.6 1.7q.5 1.3.5 3.4v5.4h-8a71 71 0 0 1-.1-8.6l.2-2.3zm-328.1.1H95v10.9h-3.4q-1.7 0-2.7-.3-1-.4-1.6-1.4a9 9 0 0 1-.5-3.5q0-2.6.6-3.7A3 3 0 0 1 89 265a8 8 0 0 1 2.5-.4m127 0h3.5v10.9h-3.5q-1.6 0-2.7-.3-1-.4-1.6-1.4a9 9 0 0 1-.5-3.5q0-2.6.6-3.7a3 3 0 0 1 1.7-1.6 8 8 0 0 1 2.5-.4\"/></g></svg>",ae:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#a2001d\" d=\"M0 0h167l52.3 252L167 512H0z\"/><path fill=\"#eee\" d=\"m167 167 170.8-44.6L512 167v178l-173.2 36.9L167 345z\"/><path fill=\"#6da544\" d=\"M167 0h345v167H167z\"/><path fill=\"#333\" d=\"M167 345h345v167H167z\"/></g></svg>",il:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M0 0h512v55.7l-25 32.7 25 34v267.2l-26 36 26 30.7V512H0v-55.7l24.8-34.1L0 389.6V122.4l27.2-33.2L0 55.7z\"/><path fill=\"#0052b4\" d=\"M0 55.7v66.7h512V55.7zm0 333.9v66.7h512v-66.7zm352.4-189.3H288l-32-55.6-32.1 55.6h-64.3l32.1 55.7-32 55.7h64.2l32.1 55.6 32.1-55.6h64.3L320.3 256l32-55.7zm-57 55.7-19.7 34.2h-39.4L216.5 256l19.8-34.2h39.4l19.8 34.2zM256 187.6l7.3 12.7h-14.6zm-59.2 34.2h14.7l-7.4 12.7zm0 68.4 7.3-12.7 7.4 12.7zm59.2 34.2-7.3-12.7h14.6zm59.2-34.2h-14.7l7.4-12.7zm-14.7-68.4h14.7l-7.3 12.7z\"/></g></svg>",ru:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#0052b4\" d=\"M512 170v172l-256 32L0 342V170l256-32z\"/><path fill=\"#eee\" d=\"M512 0v170H0V0Z\"/><path fill=\"#d80027\" d=\"M512 342v170H0V342Z\"/></g></svg>",ch:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h512v512H0z\"/><path fill=\"#eee\" d=\"M389.6 211.5h-89v-89h-89.1v89h-89v89h89v89h89v-89h89z\"/></g></svg>",at:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#d80027\" d=\"M0 0h512v167l-23.2 89.7L512 345v167H0V345l29.4-89L0 167z\"/><path fill=\"#eee\" d=\"M0 167h512v178H0z\"/></g></svg>",be:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#333\" d=\"M0 0h167l38.2 252.6L167 512H0z\"/><path fill=\"#d80027\" d=\"M345 0h167v512H345l-36.7-256z\"/><path fill=\"#ffda44\" d=\"M167 0h178v512H167z\"/></g></svg>",ie:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M167 0h178l25.9 252.3L345 512H167l-29.8-253.4z\"/><path fill=\"#6da544\" d=\"M0 0h167v512H0z\"/><path fill=\"#ff9811\" d=\"M345 0h167v512H345z\"/></g></svg>",cz:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"M0 0h512v256l-265 45.2z\"/><path fill=\"#d80027\" d=\"M210 256h302v256H0z\"/><path fill=\"#0052b4\" d=\"M0 0v512l256-256L0 0z\"/></g></svg>",hu:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#eee\" d=\"m0 167 253.8-19.3L512 167v178l-254.9 32.3L0 345z\"/><path fill=\"#d80027\" d=\"M0 0h512v167H0z\"/><path fill=\"#6da544\" d=\"M0 345h512v167H0z\"/></g></svg>",ro:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 512 512\"><mask id=\"a\"><circle cx=\"256\" cy=\"256\" r=\"256\" fill=\"#fff\"/></mask><g mask=\"url(#a)\"><path fill=\"#ffda44\" d=\"M167 0h178l25.9 252.3L345 512H167l-29.8-253.4z\"/><path fill=\"#0052b4\" d=\"M0 0h167v512H0z\"/><path fill=\"#d80027\" d=\"M345 0h167v512H345z\"/></g></svg>"};
+const SKIN_LIST=Object.keys(SKIN_DATA);
+const SKIN_URL=c=>"data:image/svg+xml,"+encodeURIComponent(SKIN_DATA[c]);
+let mySkin="";                                   // "" = plain blob
+const skinCache={};
+function skinImg(c){
+  if(!c||!SKIN_DATA[c]) return null;
+  let e=skinCache[c];
+  if(!e){e=skinCache[c]={img:new Image(),cv:null};e.img.src=SKIN_URL(c);}
+  if(e.cv) return e.cv;
+  if(e.img.complete&&e.img.naturalWidth>0){       // rasterize once to a bitmap
+    const cc=document.createElement("canvas");cc.width=cc.height=256;
+    cc.getContext("2d").drawImage(e.img,0,0,256,256);
+    return e.cv=cc;
+  }
+  return null;
+}
+(function buildSkins(){
+  const box=$("skins");
+  const mk=(code,inner)=>{
+    const d=document.createElement("div");
+    d.className="sk"+(code===mySkin?" sel":"");d.dataset.c=code;d.innerHTML=inner;
+    d.addEventListener("click",()=>{mySkin=code;
+      box.querySelectorAll(".sk").forEach(e=>e.classList.toggle("sel",e.dataset.c===code));});
+    box.appendChild(d);
+  };
+  mk("",'<span class="plain">🫧</span>');         // no skin
+  for(const c of SKIN_LIST) mk(c,`<img src="${SKIN_URL(c)}" alt="${c}" loading="lazy">`);
+})();
+
+/* ================= MENU ================= */
+$("hostBtn").addEventListener("click",()=>{
+  myName=($("nameIn").value.trim()||blankNameFallback()).slice(0,12);
+  hostGame();
+});
+$("joinBtn").addEventListener("click",()=>{
+  $("joinRow").style.display="block";$("codeIn").focus();
+});
+$("goBtn").addEventListener("click",async()=>{
+  if(typeof Peer==="undefined"){connFail("connection library failed to load — no internet, or this viewer blocks it");return;}
+  const code=$("codeIn").value.trim();
+  if(code.length<4){$("err").textContent="enter the 4-letter code";return;}
+  myName=($("nameIn").value.trim()||blankNameFallback()).slice(0,12);
+  joinGame(code);
+});
+</script>
+</body>
+</html>
