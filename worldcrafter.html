@@ -134,12 +134,70 @@
     font-family: inherit; font-size: 13px; padding: 10px 20px; border-radius: 6px;
     opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 30;
   }
+  /* ---------- MOBILE TOUCH CONTROLS ---------- */
+  #mobile-controls { position: fixed; inset: 0; z-index: 12; pointer-events: none; display: none; }
+  #mobile-controls.active { display: block; }
+
+  #look-zone { position: absolute; top: 0; right: 0; bottom: 0; left: 45%; pointer-events: auto; }
+
+  #joy-zone {
+    position: absolute; left: 18px; bottom: 18px; width: 130px; height: 130px;
+    pointer-events: auto; touch-action: none;
+  }
+  #joy-base {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.35);
+  }
+  #joy-stick {
+    position: absolute; width: 54px; height: 54px; border-radius: 50%;
+    background: rgba(255,255,255,0.35); border: 2px solid rgba(255,255,255,0.6);
+    left: 50%; top: 50%; transform: translate(-50%,-50%);
+  }
+  #joy-stick.sprint { background: rgba(139,195,74,0.55); border-color: #8bc34a; }
+
+  #sprint-btn {
+    position: absolute; left: 40px; bottom: 158px; width: 50px; height: 50px;
+    border-radius: 50%; background: rgba(255,255,255,0.12); border: 2px solid rgba(255,255,255,0.35);
+    pointer-events: auto; touch-action: none; display:flex; align-items:center; justify-content:center;
+    font-size: 20px; color: rgba(255,255,255,0.85); user-select: none;
+  }
+  #sprint-btn.on { background: rgba(139,195,74,0.5); border-color: #8bc34a; }
+
+  .action-circle {
+    position: absolute; border-radius: 50%; pointer-events: auto; touch-action: none;
+    background: rgba(255,255,255,0.12); border: 2px solid rgba(255,255,255,0.35);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: rgba(255,255,255,0.9); user-select: none;
+  }
+  .action-circle.pressed { background: rgba(139,195,74,0.45); border-color: #8bc34a; }
+
+  #jump-btn   { right: 20px; bottom: 30px; width: 76px; height: 76px; }
+  #attack-btn { right: 108px; bottom: 118px; width: 66px; height: 66px; }
+  #use-btn    { right: 20px; bottom: 118px; width: 66px; height: 66px; }
+  #crouch-btn { right: 108px; bottom: 30px; width: 58px; height: 58px; font-size: 18px; }
+
+  @media (hover: hover) and (pointer: fine) {
+    #mobile-controls { display: none !important; }
+  }
 </style>
 </head>
 <body>
 
 <div class="fps-counter">FPS: <span id="fps">60</span></div>
 <div class="crosshair"></div>
+
+<div id="mobile-controls">
+  <div id="look-zone"></div>
+  <div id="joy-zone">
+    <div id="joy-base"></div>
+    <div id="joy-stick"></div>
+  </div>
+  <div id="sprint-btn" title="Sprint">🏃</div>
+  <div id="attack-btn" class="action-circle" title="Attack / Mine">⛏</div>
+  <div id="use-btn" class="action-circle" title="Use / Place">✋</div>
+  <div id="crouch-btn" class="action-circle" title="Crouch">⬇</div>
+  <div id="jump-btn" class="action-circle" title="Jump">⤒</div>
+</div>
 <div id="toast"></div>
 
 <div id="title-overlay" class="overlay" style="background:rgba(5,10,8,0.92); z-index:40;">
@@ -158,7 +216,7 @@
         <button class="action-btn hero-play" data-hero="linda">Play as Linda</button>
       </div>
     </div>
-    <div class="panel-hint" style="padding:0; text-align:center;">Choosing a hero starts a new world · progress autosaves every minute</div>
+    <div class="panel-hint" style="padding:0; text-align:center;">Choosing a hero starts a new world · use "Save now" to save your progress</div>
   </div>
 </div>
 
@@ -1956,11 +2014,26 @@ function init(){
     refreshUI();
   }, { passive:true });
 
-  document.addEventListener('mousedown', e=>{
-    if(e.target.closest('#hotbar')||e.target.closest('.overlay')) return;
-    if(overlayOpen()){ closeOverlays(); document.body.requestPointerLock?.(); return; }
-    if(document.pointerLockElement!==document.body){ document.body.requestPointerLock?.(); return; }
+  function doMineStart(){
+    const ray=new THREE.Raycaster();
+    ray.far=8;
+    ray.setFromCamera(new THREE.Vector2(0,0), camera);
+    const hits=ray.intersectObjects(chunkMeshes.filter(Boolean));
+    if(hits.length===0) return;
+    mining.active=true;
+    mining.progress=0; mining.stage=-1;
+    const t=miningTarget();
+    if(t){ mining.x=t.x; mining.y=t.y; mining.z=t.z;
+      const type=getBlock(t.x,t.y,t.z);
+      if(type!==AIR&&type!==BEDROCK&&!canHarvest(type)){
+        const need=['hand','a wooden pickaxe','a stone pickaxe','an iron pickaxe','a diamond pickaxe'][TIER_NEEDED[type]||0];
+        const tl=heldTool();
+        toast(tl&&MAX_DURA[tl]&&(state.durability[tl]||0)<=0 ? ITEM_NAMES[tl]+' is broken — repair it!' : 'Too hard! Needs '+need);
+      }
+    }
+  }
 
+  function doPlace(){
     const ray=new THREE.Raycaster();
     ray.far=8;
     ray.setFromCamera(new THREE.Vector2(0,0), camera);
@@ -1968,78 +2041,73 @@ function init(){
     if(hits.length===0) return;
     const hit=hits[0], n=hit.face.normal, eps=0.001;
 
-    if(e.button===0){
-      // hold-to-mine: mousedown starts, mouseup stops (handled below)
-      mining.active=true;
-      mining.progress=0; mining.stage=-1;
-      const t=miningTarget();
-      if(t){ mining.x=t.x; mining.y=t.y; mining.z=t.z;
-        const type=getBlock(t.x,t.y,t.z);
-        if(type!==AIR&&type!==BEDROCK&&!canHarvest(type)){
-          const need=['hand','a wooden pickaxe','a stone pickaxe','an iron pickaxe','a diamond pickaxe'][TIER_NEEDED[type]||0];
-          const tl=heldTool();
-          toast(tl&&MAX_DURA[tl]&&(state.durability[tl]||0)<=0 ? ITEM_NAMES[tl]+' is broken — repair it!' : 'Too hard! Needs '+need);
-        }
-      }
-    } else if(e.button===2){
-      // PLACE (interaction with tables/furnaces moved to the F key)
-      const pIn=hit.point.clone().addScaledVector(n,-eps);
+    // PLACE (interaction with tables/furnaces moved to the F key)
+    const pIn=hit.point.clone().addScaledVector(n,-eps);
 
-      // right-click behavior comes from the item in hand
-      const selRaw=heldItem();
-      const foodId = (selRaw!==null && FOOD_VALUE[selRaw]!==undefined) ? selRaw : null;
-      if(foodId!==null && !PLANTS[foodId]){
-        eat(foodId); return;
-      }
-
-      // PLANT — seeds (or carrots/potatoes) on top of grass/dirt
-      if(selRaw!==null && PLANTS[selRaw]!==undefined && n.y===1){
-        const bx=Math.floor(pIn.x), by=Math.floor(pIn.y), bz=Math.floor(pIn.z);
-        const ground=getBlock(bx,by,bz);
-        if((ground===GRASS||ground===DIRT) && getBlock(bx,by+1,bz)===AIR){
-          if(state.mode==='sandbox'){
-            if(invGet(selRaw)===0){ toast('No '+ITEM_NAMES[selRaw]+' left'); return; }
-            invTake(selRaw,1);
-          }
-          plantCrop(bx,by+1,bz,PLANTS[selRaw]);
-          state.stats.placed++;
-          refreshUI();
-          return;
-        }
-      }
-      // carrots/potatoes are both food AND seeds: if planting failed, eat instead
-      if(foodId!==null){ eat(foodId); return; }
-
-      const sel=selRaw;
-      if(sel===null||sel===undefined){ toast('Empty hand — drag an item into the hotbar (Tab)'); return; }
-      if(blockTiles[sel]===undefined) return;   // tools etc. don't place
-      const p=hit.point.clone().addScaledVector(n,eps);
-      const x=Math.floor(p.x), y=Math.floor(p.y), z=Math.floor(p.z);
-      if(getBlock(x,y,z)!==AIR) return;
-      if(state.mode==='sandbox'&&invGet(sel)===0){ toast('No '+ITEM_NAMES[sel]+' — mine or craft some!'); return; }
-      setBlock(x,y,z,sel);
-      if(collides(feet.x,feet.y,feet.z)){
-        setBlock(x,y,z,AIR);
-        // PILLAR JUMP: if the block sits mostly below the feet (mid-jump,
-        // looking down), place it anyway and pop the player on top —
-        // the classic jump-and-place-underneath move.
-        const half=PLAYER_W/2;
-        const underFeet = feet.y >= y+0.4 &&
-          feet.x+half>x && feet.x-half<x+1 && feet.z+half>z && feet.z-half<z+1;
-        if(underFeet && !collides(feet.x, y+1, feet.z)){
-          setBlock(x,y,z,sel);
-          feet.y=y+1;
-          state.velocity.y=0;
-          onGround=true;
-        } else return;
-      }
-      if(state.mode==='sandbox') invTake(sel,1);
-      solidCount++;
-      state.stats.placed++;
-      rebuildAround(x,z);
-      refreshUI();
+    // behavior comes from the item in hand
+    const selRaw=heldItem();
+    const foodId = (selRaw!==null && FOOD_VALUE[selRaw]!==undefined) ? selRaw : null;
+    if(foodId!==null && !PLANTS[foodId]){
+      eat(foodId); return;
     }
+
+    // PLANT — seeds (or carrots/potatoes) on top of grass/dirt
+    if(selRaw!==null && PLANTS[selRaw]!==undefined && n.y===1){
+      const bx=Math.floor(pIn.x), by=Math.floor(pIn.y), bz=Math.floor(pIn.z);
+      const ground=getBlock(bx,by,bz);
+      if((ground===GRASS||ground===DIRT) && getBlock(bx,by+1,bz)===AIR){
+        if(state.mode==='sandbox'){
+          if(invGet(selRaw)===0){ toast('No '+ITEM_NAMES[selRaw]+' left'); return; }
+          invTake(selRaw,1);
+        }
+        plantCrop(bx,by+1,bz,PLANTS[selRaw]);
+        state.stats.placed++;
+        refreshUI();
+        return;
+      }
+    }
+    // carrots/potatoes are both food AND seeds: if planting failed, eat instead
+    if(foodId!==null){ eat(foodId); return; }
+
+    const sel=selRaw;
+    if(sel===null||sel===undefined){ toast('Empty hand — drag an item into the hotbar (Tab)'); return; }
+    if(blockTiles[sel]===undefined) return;   // tools etc. don't place
+    const p=hit.point.clone().addScaledVector(n,eps);
+    const x=Math.floor(p.x), y=Math.floor(p.y), z=Math.floor(p.z);
+    if(getBlock(x,y,z)!==AIR) return;
+    if(state.mode==='sandbox'&&invGet(sel)===0){ toast('No '+ITEM_NAMES[sel]+' — mine or craft some!'); return; }
+    setBlock(x,y,z,sel);
+    if(collides(feet.x,feet.y,feet.z)){
+      setBlock(x,y,z,AIR);
+      // PILLAR JUMP: if the block sits mostly below the feet (mid-jump,
+      // looking down), place it anyway and pop the player on top —
+      // the classic jump-and-place-underneath move.
+      const half=PLAYER_W/2;
+      const underFeet = feet.y >= y+0.4 &&
+        feet.x+half>x && feet.x-half<x+1 && feet.z+half>z && feet.z-half<z+1;
+      if(underFeet && !collides(feet.x, y+1, feet.z)){
+        setBlock(x,y,z,sel);
+        feet.y=y+1;
+        state.velocity.y=0;
+        onGround=true;
+      } else return;
+    }
+    if(state.mode==='sandbox') invTake(sel,1);
+    solidCount++;
+    state.stats.placed++;
+    rebuildAround(x,z);
+    refreshUI();
+  }
+
+  document.addEventListener('mousedown', e=>{
+    if(e.target.closest('#hotbar')||e.target.closest('.overlay')) return;
+    if(overlayOpen()){ closeOverlays(); document.body.requestPointerLock?.(); return; }
+    if(document.pointerLockElement!==document.body){ document.body.requestPointerLock?.(); return; }
+    if(e.button===0) doMineStart();
+    else if(e.button===2) doPlace();
   });
+
+  setupMobileControls();
 
   addEventListener('resize', ()=>{
     camera.aspect=innerWidth/innerHeight;
@@ -2062,11 +2130,187 @@ function init(){
       startGame();
     });
   });
-  setInterval(()=>{ if(!titleVisible()) saveWorld(true); }, 60000);   // autosave
+  // autosave disabled (no persistent storage on current GitHub Pages hosting) —
+  // manual "Save now" / "Save & title" buttons still work, and this can be
+  // re-enabled with a single line once the game is hosted somewhere that
+  // can actually persist saves:
+  // setInterval(()=>{ if(!titleVisible()) saveWorld(true); }, 60000);
 
   refreshUI();
   showTitle();
   animate();
+}
+
+// ============================================================
+// MOBILE TOUCH CONTROLS — joystick move/sprint, drag-to-look,
+// and dedicated action buttons (jump/attack/use/crouch)
+// ============================================================
+function setupMobileControls(){
+  const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints>0;
+  const panel = document.getElementById('mobile-controls');
+  if(!isTouch){ return; }
+
+  function setActive(on){ panel.classList.toggle('active', !!on); }
+  const origStartGame = startGame, origShowTitle = showTitle;
+  startGame = function(){ origStartGame(); setActive(true); };
+  showTitle = function(){ origShowTitle(); setActive(false); };
+  // hide mid-frame whenever an overlay (inventory/craft/furnace) is open
+  setInterval(()=>{ if(!titleVisible()) setActive(!overlayOpen()); }, 120);
+
+  // ---- Virtual joystick: move + sprint at outer edge ----
+  const joyZone=document.getElementById('joy-zone'), joyStick=document.getElementById('joy-stick');
+  let joyTouchId=null, joyCX=0, joyCY=0;
+  const JOY_R=52, JOY_DEAD=8;
+  function joyReset(){
+    joyTouchId=null;
+    joyStick.style.transform='translate(-50%,-50%)';
+    joyStick.classList.remove('sprint');
+    state.keys['w']=state.keys['a']=state.keys['s']=state.keys['d']=false;
+    state.keys['shift']=false;
+  }
+  joyZone.addEventListener('touchstart', e=>{
+    e.preventDefault();
+    const t=e.changedTouches[0];
+    joyTouchId=t.identifier;
+    const r=joyZone.getBoundingClientRect();
+    joyCX=r.left+r.width/2; joyCY=r.top+r.height/2;
+    handleJoy(t.clientX,t.clientY);
+  }, {passive:false});
+  joyZone.addEventListener('touchmove', e=>{
+    for(const t of e.changedTouches){ if(t.identifier===joyTouchId){ e.preventDefault(); handleJoy(t.clientX,t.clientY); } }
+  }, {passive:false});
+  ['touchend','touchcancel'].forEach(ev=>joyZone.addEventListener(ev, e=>{
+    for(const t of e.changedTouches){ if(t.identifier===joyTouchId) joyReset(); }
+  }));
+  function handleJoy(cx,cy){
+    let dx=cx-joyCX, dy=cy-joyCY;
+    const dist=Math.hypot(dx,dy);
+    const clamped=Math.min(dist,JOY_R);
+    const ang=Math.atan2(dy,dx);
+    const sx=Math.cos(ang)*clamped, sy=Math.sin(ang)*clamped;
+    joyStick.style.transform=`translate(${sx-27}px, ${sy-27}px)`;
+    const sprinting = dist>=JOY_R-4;
+    joyStick.classList.toggle('sprint', sprinting);
+    state.keys['shift']=sprinting;
+    if(dist<JOY_DEAD){
+      state.keys['w']=state.keys['a']=state.keys['s']=state.keys['d']=false;
+      return;
+    }
+    // 8-direction movement from joystick angle (screen dx/dy -> forward/strafe)
+    state.keys['w']=sy<-JOY_DEAD*0.4;
+    state.keys['s']=sy>JOY_DEAD*0.4;
+    state.keys['a']=sx<-JOY_DEAD*0.4;
+    state.keys['d']=sx>JOY_DEAD*0.4;
+  }
+
+  // ---- Dedicated sprint toggle button (next to joystick) ----
+  const sprintBtn=document.getElementById('sprint-btn');
+  let sprintLocked=false;
+  sprintBtn.addEventListener('touchstart', e=>{
+    e.preventDefault(); e.stopPropagation();
+    sprintLocked=!sprintLocked;
+    sprintBtn.classList.toggle('on', sprintLocked);
+    state.keys['shift']=sprintLocked || (joyTouchId!==null && joyStick.classList.contains('sprint'));
+  }, {passive:false});
+
+  // ---- Look zone: single-finger drag on right side rotates camera ----
+  const lookZone=document.getElementById('look-zone');
+  let lookTouchId=null, lastLX=0, lastLY=0;
+  lookZone.addEventListener('touchstart', e=>{
+    if(overlayOpen()) return;
+    const t=e.changedTouches[0];
+    lookTouchId=t.identifier; lastLX=t.clientX; lastLY=t.clientY;
+  }, {passive:true});
+  lookZone.addEventListener('touchmove', e=>{
+    for(const t of e.changedTouches){
+      if(t.identifier===lookTouchId){
+        e.preventDefault();
+        const dx=t.clientX-lastLX, dy=t.clientY-lastLY;
+        lastLX=t.clientX; lastLY=t.clientY;
+        camera.rotation.y-=dx*0.0045;
+        camera.rotation.x-=dy*0.0045;
+        camera.rotation.x=Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x));
+      }
+    }
+  }, {passive:false});
+  ['touchend','touchcancel'].forEach(ev=>lookZone.addEventListener(ev, e=>{
+    for(const t of e.changedTouches){ if(t.identifier===lookTouchId) lookTouchId=null; }
+  }));
+
+  // ---- Jump button (double-tap toggles fly in creative; then Fly Up/Down) ----
+  const jumpBtn=document.getElementById('jump-btn');
+  let lastJumpTap=0, flying=false;
+  function setFlyLabel(){
+    jumpBtn.textContent = flying ? '⤒' : '⤒';
+  }
+  jumpBtn.addEventListener('touchstart', e=>{
+    e.preventDefault(); e.stopPropagation();
+    jumpBtn.classList.add('pressed');
+    const now=performance.now();
+    if(state.mode==='sandbox'){
+      state.keys[' ']=true;
+    } else {
+      // creative: double-tap toggles fly; while flying this button = fly up
+      if(now-lastJumpTap<320){
+        flying=!flying;
+        toast(flying?'Flying — jump=up, crouch=down':'Flying off');
+      }
+      lastJumpTap=now;
+      state.keys[' ']=true;
+      if(flying){ state.velocity.y=0.14; onGround=false; }
+    }
+  }, {passive:false});
+  jumpBtn.addEventListener('touchend', e=>{
+    e.preventDefault();
+    jumpBtn.classList.remove('pressed');
+    state.keys[' ']=false;
+  }, {passive:false});
+
+  // ---- Attack / Mine button (hold = continuous mining) ----
+  const attackBtn=document.getElementById('attack-btn');
+  attackBtn.addEventListener('touchstart', e=>{
+    e.preventDefault(); e.stopPropagation();
+    attackBtn.classList.add('pressed');
+    if(!overlayOpen()) doMineStart();
+  }, {passive:false});
+  ['touchend','touchcancel'].forEach(ev=>attackBtn.addEventListener(ev, e=>{
+    e.preventDefault();
+    attackBtn.classList.remove('pressed');
+    stopMining();
+  }, {passive:false}));
+
+  // ---- Use / Place button ----
+  const useBtn=document.getElementById('use-btn');
+  useBtn.addEventListener('touchstart', e=>{
+    e.preventDefault(); e.stopPropagation();
+    useBtn.classList.add('pressed');
+    if(!overlayOpen()) doPlace();
+  }, {passive:false});
+  ['touchend','touchcancel'].forEach(ev=>useBtn.addEventListener(ev, e=>{
+    e.preventDefault();
+    useBtn.classList.remove('pressed');
+  }, {passive:false}));
+
+  // ---- Crouch / Sneak button (toggle); in creative+flying, acts as Fly Down ----
+  const crouchBtn=document.getElementById('crouch-btn');
+  crouchBtn.addEventListener('touchstart', e=>{
+    e.preventDefault(); e.stopPropagation();
+    if(state.mode!=='sandbox' && flying){
+      crouchBtn.classList.add('pressed');
+      state.velocity.y=-0.14; onGround=false;
+      return;
+    }
+    const on=!state.keys['c'];
+    state.keys['c']=on;
+    crouchBtn.classList.toggle('pressed', on);
+  }, {passive:false});
+  ['touchend','touchcancel'].forEach(ev=>crouchBtn.addEventListener(ev, e=>{
+    if(state.mode!=='sandbox' && flying){
+      e.preventDefault();
+      crouchBtn.classList.remove('pressed');
+    }
+  }, {passive:false}));
+
 }
 
 // ============================================================
