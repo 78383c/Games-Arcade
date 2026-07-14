@@ -441,6 +441,7 @@ function safeSend(conn,msg){
 function sendToPlayer(p,msg){safeSend(p.conn,msg);}
 
 function roster(){return players.map(p=>({i:p.id,n:p.name,h:p.hue,b:p.isBot?1:0,k:p.skin}));}
+let lastFoodSync=0;
 function broadcast(){
   const snap={t:"st",
     p:players.map(p=>({i:p.id,s:p.score,
@@ -449,7 +450,17 @@ function broadcast(){
   if(virusDirty){snap.v=viruses.map(v=>[Math.round(v.x),Math.round(v.y)]);virusDirty=false;}
   if(rosterDirty){snap.r=roster();rosterDirty=false;}
   foodEaten=[];foodNew=[];
-  for(const c of conns) safeSend(c,snap);
+  // periodic full-food safety resync (cheap: ~10KB every 10s)
+  const now=performance.now();
+  if(now-lastFoodSync>10000){lastFoodSync=now;for(const c of conns)c._needFood=true;}
+  for(const c of conns){
+    if(!c||!c.open) continue;
+    const dc=c.dataChannel;
+    if(dc&&dc.bufferedAmount>65536){c._needFood=true;continue;} // skipped => deltas lost => must resync
+    if(c._needFood){c._needFood=false;
+      safeSend(c,{...snap,ff:[...food.values()]});}
+    else safeSend(c,snap);
+  }
 }
 
 function joinGame(code){
@@ -487,6 +498,7 @@ function joinGame(code){
       else if(d.t==="st"){snapPrev=snapCur;snapCur=d;snapT=0;
         if(d.r) clientRoster=new Map(d.r.map(p=>[p.i,p]));
         if(d.v) clientViruses=d.v;
+        if(d.ff) clientFood=new Map(d.ff.map(f=>[f.id,f]));
         for(const id of d.fe) clientFood.delete(id);
         for(const f of d.fn) clientFood.set(f.id,f);}
       else if(d.t==="dead") showToast("EATEN!");
