@@ -1,0 +1,1770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>HexArena</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.28.4/babel.min.js"></script>
+<!-- Peer-to-peer rooms (only used when the page isn't served by hex-server.js) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<!-- The shared engine: the same rules the server and a peer-to-peer host run -->
+<script id="hex-core">
+// HexArena shared engine: the simulation, the bots, and the Room that runs a match. The same file runs
+// in the browser (solo play and peer-to-peer hosting) and in Node (hex-server.js), so every way of
+// playing uses identical rules. It has no rendering; the page draws from the snapshots a Room sends.
+(function (root) {
+'use strict';
+
+const TICK_MS = 16;            // one simulation step; the sim clock advances by this each step
+const ROUND_MS = 360000;       // 6 minute rounds
+const WIN_SHARE = 0.5;         // one side owning half the board ends the round immediately
+const RESULTS_MS = 10000;      // results screen between rounds; the next round starts on its own
+const SNAPSHOT_MS = 50;        // state goes out to players 20 times a second
+
+const HEX = 14;                // hex centre-to-corner radius in px
+const SQRT3 = Math.sqrt(3);
+const MARGIN = 6;
+const MOVE_SPEED = 0.9;        // px per step (~56 px/s, about 2.3 tiles a second)
+const BOT_TURN_RATE = 0.029;   // rad per step; a ~31px turning arc so bots rarely clip their own trail
+const RESPAWN_MS = 3000;       // everyone is back this long after being cut
+const SPAWN_RADIUS = 2;        // a fresh start: a 19-tile hex blob
+
+// The three ways to play. Solo is free-for-all run in your own browser with no network.
+const MODES = {
+  solo: { key: 'solo', label: 'Solo', cols: 64, rows: 56, seats: 5, teamSize: 1 },
+  ffa: { key: 'ffa', label: 'Free for all', cols: 64, rows: 56, seats: 5, teamSize: 1 },
+  teams: { key: 'teams', label: 'Teams', cols: 90, rows: 80, seats: 8, teamSize: 2 }, // ~2x the area
+};
+
+// Free-for-all colours players pick from; bots take whatever no person is wearing.
+const COLORS = ['#00ff88', '#ff6b6b', '#4ecdc4', '#ffe66d', '#c9b1ff', '#ff9f43', '#54a0ff', '#ff6bd6'];
+const TEAM_NAMES = ['Green', 'Red', 'Blue', 'Gold'];
+const TEAM_COLORS = ['#00ff88', '#ff6b6b', '#54a0ff', '#ffe66d'];
+const BOT_NAMES = ['Crimson', 'Teal', 'Amber', 'Violet', 'Tangerine', 'Azure', 'Rose', 'Lime', 'Onyx', 'Coral'];
+const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I or O, which read as 1 and 0
+
+function wrapAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+function makeCode() {
+  let code = '';
+  for (let i = 0; i < 4; i++) code += CODE_LETTERS[Math.floor(Math.random() * CODE_LETTERS.length)];
+  return code;
+}
+
+function cleanName(name) {
+  const n = String(name || '').replace(/[^\w .\-]/g, '').trim().slice(0, 12);
+  return n || 'Player';
+}
+
+// ---- Board geometry: pointy-top hexes, odd rows shifted right half a tile ("odd-r" layout).
+// Built once per size and shared, since modes use different board sizes. ----
+
+const boards = new Map();
+
+function getBoard(cols, rows) {
+  const key = `${cols}x${rows}`;
+  if (boards.has(key)) return boards.get(key);
+
+  const TILE_COUNT = cols * rows;
+  const ORIGIN_X = MARGIN + (HEX * SQRT3) / 2;
+  const ORIGIN_Y = MARGIN + HEX;
+  const X_MIN = ORIGIN_X;
+  const X_MAX = ORIGIN_X + SQRT3 * HEX * (cols - 0.5);
+  const Y_MIN = ORIGIN_Y;
+  const Y_MAX = ORIGIN_Y + 1.5 * HEX * (rows - 1);
+
+  const CENTER_X = new Float32Array(TILE_COUNT);
+  const CENTER_Y = new Float32Array(TILE_COUNT);
+  for (let i = 0; i < TILE_COUNT; i++) {
+    const c = i % cols, r = (i / cols) | 0;
+    CENTER_X[i] = ORIGIN_X + SQRT3 * HEX * (c + 0.5 * (r & 1));
+    CENTER_Y[i] = ORIGIN_Y + 1.5 * HEX * r;
+  }
+
+  const NEIGHBORS = Array.from({ length: TILE_COUNT }, (_, i) => {
+    const c = i % cols, r = (i / cols) | 0;
+    const offsets = (r & 1)
+      ? [[1, 0], [-1, 0], [1, -1], [0, -1], [1, 1], [0, 1]]
+      : [[1, 0], [-1, 0], [0, -1], [-1, -1], [0, 1], [-1, 1]];
+    return offsets
+      .map(([dc, dr]) => [c + dc, r + dr])
+      .filter(([cc, rr]) => cc >= 0 && cc < cols && rr >= 0 && rr < rows)
+      .map(([cc, rr]) => rr * cols + cc);
+  });
+
+  // Pixel -> tile index via axial coordinates and cube rounding. -1 when off the board.
+  function tileAt(x, y) {
+    const px = x - ORIGIN_X, py = y - ORIGIN_Y;
+    const q = ((SQRT3 / 3) * px - py / 3) / HEX;
+    const r = ((2 / 3) * py) / HEX;
+    const s = -q - r;
+    let rq = Math.round(q), rr = Math.round(r);
+    const rs = Math.round(s);
+    const dq = Math.abs(rq - q), dr = Math.abs(rr - r), ds = Math.abs(rs - s);
+    if (dq > dr && dq > ds) rq = -rr - rs;
+    else if (dr > ds) rr = -rq - rs;
+    const row = rr, col = rq + (rr - (rr & 1)) / 2;
+    if (row < 0 || row >= rows || col < 0 || col >= cols) return -1;
+    return row * cols + col;
+  }
+
+  function tilesWithin(center, radius) {
+    const seen = new Set([center]);
+    let frontier = [center];
+    for (let k = 0; k < radius; k++) {
+      const next = [];
+      frontier.forEach(t => NEIGHBORS[t].forEach(n => {
+        if (!seen.has(n)) { seen.add(n); next.push(n); }
+      }));
+      frontier = next;
+    }
+    return [...seen];
+  }
+
+  const board = {
+    COLS: cols, ROWS: rows, TILE_COUNT, X_MIN, X_MAX, Y_MIN, Y_MAX,
+    WORLD_W: Math.ceil(X_MAX + (HEX * SQRT3) / 2 + MARGIN),
+    WORLD_H: Math.ceil(Y_MAX + HEX + MARGIN),
+    CENTER_X, CENTER_Y, NEIGHBORS,
+    // Tiles on the board edge: the flood fill that decides what a loop encloses starts from these.
+    IS_EDGE: NEIGHBORS.map(n => n.length < 6),
+    tileAt, tilesWithin,
+  };
+  boards.set(key, board);
+  return board;
+}
+
+// ---- World ----
+// Land belongs to a SIDE: a team in Teams mode, a single player in free-for-all (where each player
+// is a side of one). Trails always belong to one player. Visuals (particles, flashes, shake) are
+// left to the page; the world only records events, which travel inside the next snapshot.
+
+function createWorld(modeKey) {
+  const mode = MODES[modeKey] || MODES.ffa;
+  const B = getBoard(mode.cols, mode.rows);
+  const teamCount = mode.teamSize > 1 ? mode.seats / mode.teamSize : mode.seats;
+  const w = {
+    mode: mode.key,
+    board: B,
+    teamSize: mode.teamSize,
+    teamCount,
+    simTime: 0,
+    owner: new Int8Array(B.TILE_COUNT).fill(-1),  // which side owns each tile, -1 neutral
+    trail: new Int8Array(B.TILE_COUNT).fill(-1),  // which player's open trail crosses each tile
+    counts: new Int32Array(teamCount),            // tiles owned per side, kept in sync by setOwner
+    players: [],
+    over: null,
+    changes: new Set(),                           // tiles changed since the last snapshot
+    events: [],                                   // spawns, kills, captures since the last snapshot
+  };
+  for (let id = 0; id < mode.seats; id++) {
+    const team = mode.teamSize > 1 ? Math.floor(id / mode.teamSize) : id;
+    w.players.push({
+      id, team, name: BOT_NAMES[id], isBot: true,
+      color: mode.teamSize > 1 ? TEAM_COLORS[team] : COLORS[id + 1],
+      alive: false, kills: 0, deaths: 0, best: 0,
+      x: 0, y: 0, angle: 0, lastTile: -1, trailTiles: [], trailPath: [],
+      moving: true, respawnAt: 0, bot: null,
+      killedBy: null, cause: null,
+      nemesis: -1,              // id of whoever last cut this player, until they cut them back
+      revengeAt: -Infinity,
+    });
+  }
+  w.players.forEach(p => spawn(w, p));
+  return w;
+}
+
+function sideInfo(w, side) {
+  if (w.teamSize > 1) return { name: TEAM_NAMES[side], color: TEAM_COLORS[side] };
+  const p = w.players[side];
+  return { name: p.name, color: p.color };
+}
+
+function setOwner(w, t, side) {
+  const prev = w.owner[t];
+  if (prev === side) return;
+  if (prev >= 0) w.counts[prev]--;
+  if (side >= 0) w.counts[side]++;
+  w.owner[t] = side;
+  w.changes.add(t);
+}
+
+function setTrail(w, t, id) {
+  if (w.trail[t] === id) return;
+  w.trail[t] = id;
+  w.changes.add(t);
+}
+
+function newBotBrain(p) {
+  return {
+    mode: 'home', steps: 0, legs: 0, legLen: 0, maxTrail: 0, retarget: 0, clock: 0,
+    turnDir: Math.random() < 0.5 ? 1 : -1,
+    targetAngle: p.angle,
+  };
+}
+
+function enemyHeadPenalty(w, p, x, y) {
+  let s = 0;
+  w.players.forEach(o => {
+    if (o !== p && o.alive && o.team !== p.team) s += Math.max(0, 200 - Math.hypot(o.x - x, o.y - y));
+  });
+  return s;
+}
+
+function spawn(w, p) {
+  const B = w.board;
+  let at = -1;
+
+  // In Teams, if your side still holds land you come back on it, next to your partner's work.
+  if (w.teamSize > 1 && w.counts[p.team] > 0) {
+    let bestScore = Infinity;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const t = Math.floor(Math.random() * B.TILE_COUNT);
+      if (w.owner[t] !== p.team || w.trail[t] !== -1) continue;
+      const score = enemyHeadPenalty(w, p, B.CENTER_X[t], B.CENTER_Y[t]);
+      if (score < bestScore) { bestScore = score; at = t; }
+    }
+  }
+
+  // Otherwise a fresh patch: try spots, keep the one with the least land and fewest heads nearby.
+  if (at < 0) {
+    let bestScore = Infinity;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const c = 3 + Math.floor(Math.random() * (B.COLS - 6));
+      const r = 3 + Math.floor(Math.random() * (B.ROWS - 6));
+      const center = r * B.COLS + c;
+      const score = B.tilesWithin(center, SPAWN_RADIUS + 2)
+        .filter(t => w.owner[t] !== -1 || w.trail[t] !== -1).length * 10
+        + enemyHeadPenalty(w, p, B.CENTER_X[center], B.CENTER_Y[center]);
+      if (score < bestScore) { bestScore = score; at = center; }
+    }
+    B.tilesWithin(at, SPAWN_RADIUS).forEach(t => setOwner(w, t, p.team));
+  }
+
+  p.x = B.CENTER_X[at];
+  p.y = B.CENTER_Y[at];
+  p.angle = Math.random() * Math.PI * 2;
+  p.lastTile = at;
+  p.moving = p.isBot; // people wait on their patch until they steer
+  p.trailPath = [];   // the head's actual route since leaving home, drawn as the trail line
+  p.trailTiles = [];
+  p.alive = true;
+  p.best = Math.max(p.best, w.counts[p.team]);
+  p.bot = p.isBot ? newBotBrain(p) : null;
+  w.events.push({ type: 'spawn', id: p.id, x: p.x, y: p.y, color: p.color });
+  checkStarved(w); // a spawn can overwrite a side's last tiles
+}
+
+function clearTrail(w, p) {
+  p.trailTiles.forEach(t => { if (w.trail[t] === p.id) setTrail(w, t, -1); });
+  p.trailTiles = [];
+  p.trailPath = [];
+}
+
+function kill(w, victim, killer, cause) {
+  if (!victim.alive) return;
+  victim.alive = false;
+  victim.deaths++;
+  clearTrail(w, victim);
+  // Free-for-all: your land goes neutral when you die. Teams: the land is the team's, and it stays
+  // for your partner (and for you to respawn on).
+  if (w.teamSize === 1) {
+    for (let t = 0; t < w.board.TILE_COUNT; t++) if (w.owner[t] === victim.team) setOwner(w, t, -1);
+  }
+  if (killer && killer !== victim) {
+    killer.kills++;
+    // Revenge: whoever cuts you stays marked until you cut them back
+    if (!victim.isBot) victim.nemesis = killer.id;
+    if (!killer.isBot && killer.nemesis === victim.id) {
+      killer.nemesis = -1;
+      killer.revengeAt = w.simTime;
+    }
+  }
+  victim.killedBy = killer && killer !== victim ? killer.name : null;
+  victim.cause = cause;
+  victim.respawnAt = w.simTime + RESPAWN_MS;
+  w.events.push({
+    type: 'kill', victim: victim.id, killer: killer ? killer.id : -1,
+    x: victim.x, y: victim.y, color: victim.color,
+  });
+}
+
+// Losing all your side's land isn't death (only a cut trail is). You get a fresh one-ring patch
+// where you stand, and any open trail is dropped because there was no land left to close it onto.
+function checkStarved(w) {
+  const B = w.board;
+  w.players.forEach(o => {
+    if (!o.alive || w.counts[o.team] > 0) return;
+    clearTrail(w, o);
+    const here = B.tileAt(o.x, o.y);
+    B.tilesWithin(here >= 0 ? here : o.lastTile, 1).forEach(t => setOwner(w, t, o.team));
+    w.events.push({ type: 'reseed', id: o.id, x: o.x, y: o.y, color: o.color });
+  });
+}
+
+// Called whenever a head crosses into a new tile.
+// The ONLY way to die is an enemy crossing your open trail. Your own trail and your teammates'
+// trails are harmless to cross.
+function enterTile(w, p, t) {
+  const trailOwner = w.trail[t];
+  if (trailOwner === p.id) return;
+  if (trailOwner !== -1) {
+    const other = w.players[trailOwner];
+    if (other.team === p.team) return; // a teammate's trail: pass straight over it
+    kill(w, other, p, 'trail cut');
+  }
+
+  if (w.owner[t] === p.team) {
+    if (p.trailTiles.length > 0) capture(w, p);
+  } else {
+    // The trail line follows the head's real path, starting where it left home. The tiles
+    // underneath are what can be cut and what gets claimed.
+    if (p.trailTiles.length === 0) p.trailPath = [[p.x, p.y]];
+    else p.trailPath.push([p.x, p.y]);
+    setTrail(w, t, p.id);
+    p.trailTiles.push(t);
+  }
+}
+
+// Back on your side's land with an open trail: the trail becomes land, and so does everything
+// it encloses.
+function capture(w, p) {
+  const B = w.board;
+  const side = p.team;
+  const gained = [];
+  p.trailTiles.forEach(t => {
+    if (w.trail[t] === p.id) setTrail(w, t, -1);
+    if (w.owner[t] !== side) gained.push(t);
+    setOwner(w, t, side);
+  });
+  p.trailTiles = [];
+  p.trailPath = [];
+
+  // Flood from the board edge through every tile that isn't ours. Whatever the flood can't
+  // reach is walled in by our land, so it's captured.
+  const reached = new Uint8Array(B.TILE_COUNT);
+  const queue = new Int32Array(B.TILE_COUNT);
+  let head = 0, tail = 0;
+  for (let t = 0; t < B.TILE_COUNT; t++) {
+    if (B.IS_EDGE[t] && w.owner[t] !== side) { reached[t] = 1; queue[tail++] = t; }
+  }
+  while (head < tail) {
+    const t = queue[head++];
+    for (const n of B.NEIGHBORS[t]) {
+      if (!reached[n] && w.owner[n] !== side) { reached[n] = 1; queue[tail++] = n; }
+    }
+  }
+
+  for (let t = 0; t < B.TILE_COUNT; t++) {
+    if (reached[t] || w.owner[t] === side) continue;
+    setOwner(w, t, side);
+    gained.push(t);
+  }
+
+  if (gained.length) w.events.push({ type: 'capture', id: p.id, color: p.color, tiles: gained });
+  p.best = Math.max(p.best, w.counts[side]);
+}
+
+function nearestOwned(w, p) {
+  const B = w.board;
+  let best = -1, bestD = Infinity;
+  for (let t = 0; t < B.TILE_COUNT; t++) {
+    if (w.owner[t] !== p.team) continue;
+    const d = (B.CENTER_X[t] - p.x) ** 2 + (B.CENTER_Y[t] - p.y) ** 2;
+    if (d < bestD) { bestD = d; best = t; }
+  }
+  return best;
+}
+
+// ---- Bot brain: go out, make a two-legged loop, come home. Bail early when an enemy is near,
+// and take a swing at any enemy trail that passes close. ----
+
+function botThink(w, p) {
+  const B = w.board;
+  const b = p.bot;
+  const onHome = w.owner[p.lastTile] === p.team;
+  const trailLen = p.trailTiles.length;
+  b.clock++;
+
+  if (b.mode === 'home') {
+    if (!onHome) {
+      b.mode = 'out';
+      b.steps = 0;
+      b.legs = 0;
+      // Leg lengths are in steps, so they scale with the move speed to cover similar ground
+      b.legLen = 70 + Math.random() * 110;
+      b.maxTrail = 12 + Math.floor(Math.random() * 18);
+      b.turnDir = Math.random() < 0.5 ? 1 : -1;
+    } else if (b.clock % 45 === 0) {
+      b.targetAngle = p.angle + (Math.random() - 0.5) * 1.4;
+    }
+  } else if (b.mode === 'out') {
+    b.steps++;
+    const threatened = w.players.some(o =>
+      o.team !== p.team && o.alive && o.moving && Math.hypot(o.x - p.x, o.y - p.y) < 80);
+    if (threatened || trailLen >= b.maxTrail || b.legs >= 2) {
+      b.mode = 'return';
+      b.retarget = 0;
+    } else if (b.steps >= b.legLen) {
+      b.steps = 0;
+      b.legs++;
+      b.legLen *= 0.7;
+      b.targetAngle = p.angle + b.turnDir * Math.PI / 2;
+    }
+  }
+
+  if (b.mode === 'return') {
+    if (onHome && trailLen === 0) {
+      b.mode = 'home';
+      b.targetAngle = p.angle + (Math.random() < 0.5 ? 1 : -1) * Math.PI * 0.6;
+    } else if (--b.retarget <= 0) {
+      b.retarget = 15;
+      const t = nearestOwned(w, p);
+      if (t >= 0) b.targetAngle = Math.atan2(B.CENTER_Y[t] - p.y, B.CENTER_X[t] - p.x);
+    }
+  }
+
+  // Opportunism: a nearby enemy trail tile is worth a detour (cutting it kills its owner).
+  if (b.mode !== 'return' || trailLen < 4) {
+    for (const o of w.players) {
+      if (o.team === p.team || !o.alive || o.trailTiles.length === 0) continue;
+      const t = o.trailTiles[o.trailTiles.length - 1];
+      if (Math.hypot(B.CENTER_X[t] - p.x, B.CENTER_Y[t] - p.y) < 70) {
+        b.targetAngle = Math.atan2(B.CENTER_Y[t] - p.y, B.CENTER_X[t] - p.x);
+        break;
+      }
+    }
+  }
+
+  // Avoid walls and our own trail by peeking one tile ahead.
+  const settled = Math.abs(wrapAngle(b.targetAngle - p.angle)) < 0.2;
+  if (settled) {
+    const lx = p.x + Math.cos(p.angle) * 24, ly = p.y + Math.sin(p.angle) * 24;
+    const offBoard = lx < B.X_MIN || lx > B.X_MAX || ly < B.Y_MIN || ly > B.Y_MAX;
+    const ahead = offBoard ? -1 : B.tileAt(lx, ly);
+    const ownTrailAhead = ahead >= 0 && ahead !== p.lastTile && w.trail[ahead] === p.id;
+    if (offBoard || ownTrailAhead) {
+      b.targetAngle = p.angle + b.turnDir * Math.PI / 2;
+      if (b.mode === 'out') { b.legs++; b.steps = 0; }
+    }
+  }
+
+  const diff = wrapAngle(b.targetAngle - p.angle);
+  p.angle += Math.max(-BOT_TURN_RATE, Math.min(BOT_TURN_RATE, diff));
+}
+
+// A person's steering input: eight straight directions, and you keep going in the last one.
+function steer(p, dx, dy) {
+  if (!p || p.isBot || !p.alive) return;
+  dx = Math.sign(Number(dx) || 0);
+  dy = Math.sign(Number(dy) || 0);
+  if (!dx && !dy) return;
+  const a = Math.atan2(dy, dx);
+  if (a !== p.angle && p.trailTiles.length) p.trailPath.push([p.x, p.y]); // a corner in the trail line
+  p.angle = a;
+  p.moving = true;
+}
+
+function step(w) {
+  const B = w.board;
+  w.simTime += TICK_MS;
+
+  for (const p of w.players) {
+    if (!p.alive) {
+      if (w.simTime >= p.respawnAt) spawn(w, p);
+      continue;
+    }
+    if (p.isBot) botThink(w, p);
+    if (!p.moving) continue;
+
+    // Straight-line movement across the hex board; whichever hex the head is over is the one it claims
+    p.x = Math.max(B.X_MIN, Math.min(B.X_MAX, p.x + Math.cos(p.angle) * MOVE_SPEED));
+    p.y = Math.max(B.Y_MIN, Math.min(B.Y_MAX, p.y + Math.sin(p.angle) * MOVE_SPEED));
+
+    const t = B.tileAt(p.x, p.y);
+    if (t !== -1 && t !== p.lastTile) {
+      p.lastTile = t;
+      enterTile(w, p, t);
+    }
+  }
+  checkStarved(w); // catches any side whose last tile was taken this step
+
+  if (w.over) return;
+  for (let side = 0; side < w.teamCount; side++) {
+    if (w.counts[side] >= B.TILE_COUNT * WIN_SHARE) {
+      w.over = { reason: 'domination', by: sideInfo(w, side).name, side };
+      return;
+    }
+  }
+  if (w.simTime >= ROUND_MS) w.over = { reason: 'time' };
+}
+
+// A fresh round in the same room: the board clears, everyone keeps their seat, name and colour.
+function resetRound(w) {
+  w.owner.fill(-1);
+  w.trail.fill(-1);
+  w.counts.fill(0);
+  w.simTime = 0;
+  w.over = null;
+  w.changes.clear();
+  w.events = [];
+  w.players.forEach(p => {
+    Object.assign(p, {
+      alive: false, kills: 0, deaths: 0, best: 0, trailTiles: [], trailPath: [],
+      killedBy: null, cause: null, nemesis: -1, revengeAt: -Infinity, respawnAt: 0,
+    });
+  });
+  w.players.forEach(p => spawn(w, p));
+}
+
+// One row per side (per player in free-for-all, per team in Teams), best land first.
+function standings(w) {
+  const rows = [];
+  for (let side = 0; side < w.teamCount; side++) {
+    const members = w.players.filter(p => p.team === side);
+    const info = sideInfo(w, side);
+    rows.push({
+      side, name: info.name, color: info.color,
+      tiles: w.counts[side],
+      pct: (w.counts[side] / w.board.TILE_COUNT) * 100,
+      kills: members.reduce((s, p) => s + p.kills, 0),
+      deaths: members.reduce((s, p) => s + p.deaths, 0),
+      alive: members.some(p => p.alive),
+      hasHuman: members.some(p => !p.isBot),
+      members: members.map(p => ({ id: p.id, name: p.name, isBot: p.isBot, alive: p.alive })),
+    });
+  }
+  return rows.sort((a, b) => b.tiles - a.tiles);
+}
+
+// ---- Snapshots: what a Room sends to each player ----
+
+const r1 = v => Math.round(v * 10) / 10;
+
+function playerState(p) {
+  return {
+    id: p.id, team: p.team, name: p.name, color: p.color, isBot: p.isBot, alive: p.alive,
+    x: r1(p.x), y: r1(p.y), angle: Math.round(p.angle * 1000) / 1000, moving: p.moving,
+    kills: p.kills, deaths: p.deaths, best: p.best,
+    // -Infinity ("never") doesn't survive JSON (it becomes null) or PeerJS's binary packer (it
+    // throws), so "no revenge yet" travels as an explicit null.
+    nemesis: p.nemesis, revengeAt: Number.isFinite(p.revengeAt) ? p.revengeAt : null,
+    respawnAt: p.respawnAt, killedBy: p.killedBy,
+    trail: p.trailTiles.length ? p.trailPath.map(([x, y]) => [r1(x), r1(y)]) : null,
+  };
+}
+
+// ---- Room: one match. People take a bot's seat when they join (at any time, mid-round included)
+// and hand it back to a bot when they leave. The host (Node server or the hosting browser) calls
+// tick() with a real clock; the room catches up in fixed 16ms steps, so a throttled background tab
+// still plays at the right speed. ----
+
+class Room {
+  constructor(code, modeKey) {
+    this.code = code;
+    this.mode = MODES[modeKey] || MODES.ffa;
+    this.world = createWorld(this.mode.key);
+    this.clients = new Map(); // seat id -> { send, needFull }
+    this.phase = 'playing';   // 'playing' | 'results'
+    this.overInfo = null;
+    this.resultsUntil = 0;
+    this.lastReal = null;
+    this.acc = 0;
+    this.snapAcc = 0;
+  }
+
+  get humanCount() { return this.clients.size; }
+
+  pickSeat() {
+    const w = this.world;
+    if (w.teamSize === 1) return w.players.find(p => p.isBot) || null;
+    // Teams: the team with the fewest people, so friends spread out before doubling up
+    const people = side => w.players.filter(p => p.team === side && !p.isBot).length;
+    const sides = [...Array(w.teamCount).keys()].sort((a, b) => people(a) - people(b) || a - b);
+    for (const side of sides) {
+      const seat = w.players.find(p => p.team === side && p.isBot);
+      if (seat) return seat;
+    }
+    return null;
+  }
+
+  join(send, name, color) {
+    const w = this.world;
+    const seat = this.pickSeat();
+    if (!seat) return { error: `Room ${this.code} is full (${w.players.length} players)` };
+
+    let c = seat.color;
+    if (w.teamSize === 1) {
+      // Your pick, unless another person already wears it; a bot wearing it changes colour.
+      const takenByPeople = new Set(w.players.filter(p => !p.isBot).map(p => p.color));
+      c = COLORS.includes(color) && !takenByPeople.has(color) ? color : COLORS.find(x => !takenByPeople.has(x));
+      const clash = w.players.find(p => p.isBot && p !== seat && p.color === c);
+      if (clash) {
+        const used = new Set(w.players.filter(p => p !== clash && p !== seat).map(p => p.color).concat(c));
+        clash.color = COLORS.find(x => !used.has(x)) || clash.color;
+      }
+    }
+
+    // The bot in this seat bows out: its trail clears (and in free-for-all its land), and the new
+    // player spawns fresh.
+    this.vacate(seat);
+    Object.assign(seat, {
+      isBot: false, name: cleanName(name), color: c, bot: null,
+      kills: 0, deaths: 0, best: 0, nemesis: -1, revengeAt: -Infinity, killedBy: null,
+    });
+    if (this.phase === 'playing') spawn(w, seat);
+    this.clients.set(seat.id, { send, needFull: true });
+    w.events.push({ type: 'joined', id: seat.id, name: seat.name });
+    return { id: seat.id, color: c, team: seat.team };
+  }
+
+  leave(id) {
+    const w = this.world;
+    const p = w.players[id];
+    if (!p || p.isBot) return;
+    this.clients.delete(id);
+    w.events.push({ type: 'left', id, name: p.name });
+    const inUse = new Set(w.players.map(o => o.name));
+    Object.assign(p, {
+      isBot: true,
+      name: BOT_NAMES.find(n => !inUse.has(n)) || `Bot ${id + 1}`,
+      moving: true,
+    });
+    p.bot = newBotBrain(p);
+    w.players.forEach(o => { if (o.nemesis === id) o.nemesis = -1; });
+  }
+
+  vacate(p) {
+    const w = this.world;
+    clearTrail(w, p);
+    if (w.teamSize === 1) {
+      for (let t = 0; t < w.board.TILE_COUNT; t++) if (w.owner[t] === p.team) setOwner(w, t, -1);
+    }
+    p.alive = false;
+  }
+
+  input(id, dx, dy) {
+    if (this.phase === 'playing') steer(this.world.players[id], dx, dy);
+  }
+
+  tick(nowMs) {
+    const w = this.world;
+    if (this.lastReal === null) this.lastReal = nowMs;
+    const elapsed = Math.max(0, Math.min(2000, nowMs - this.lastReal));
+    this.lastReal = nowMs;
+
+    if (this.phase === 'playing') {
+      this.acc += elapsed;
+      while (this.acc >= TICK_MS) {
+        this.acc -= TICK_MS;
+        step(w);
+        if (w.over) {
+          this.phase = 'results';
+          this.resultsUntil = nowMs + RESULTS_MS;
+          this.overInfo = { reason: w.over.reason, by: w.over.by || null, side: w.over.side ?? null, standings: standings(w) };
+          this.acc = 0;
+          break;
+        }
+      }
+    } else if (nowMs >= this.resultsUntil) {
+      resetRound(w);
+      this.phase = 'playing';
+      this.overInfo = null;
+      this.clients.forEach(c => { c.needFull = true; });
+    }
+
+    this.snapAcc += elapsed;
+    if (this.snapAcc >= SNAPSHOT_MS) {
+      this.snapAcc = 0;
+      this.broadcast(nowMs);
+    }
+  }
+
+  snapshot(full, nowMs) {
+    const w = this.world;
+    const msg = {
+      t: 'state',
+      room: this.code,
+      mode: this.mode.key,
+      cols: w.board.COLS,
+      rows: w.board.ROWS,
+      teamSize: w.teamSize,
+      sides: [...Array(w.teamCount).keys()].map(s => sideInfo(w, s)),
+      simTime: w.simTime,
+      phase: this.phase,
+      over: this.overInfo,
+      nextRoundIn: this.phase === 'results' ? Math.max(0, this.resultsUntil - nowMs) : null,
+      counts: Array.from(w.counts),
+      players: w.players.map(playerState),
+      events: w.events,
+    };
+    if (full) {
+      msg.owner = Array.from(w.owner);
+      msg.trail = Array.from(w.trail);
+    } else {
+      msg.delta = [...w.changes].map(t => [t, w.owner[t], w.trail[t]]);
+    }
+    return msg;
+  }
+
+  // New and returning players get the whole board once; everyone else gets only what changed.
+  broadcast(nowMs) {
+    let full = null, delta = null;
+    for (const [id, c] of this.clients) {
+      let msg;
+      if (c.needFull) {
+        full = full || this.snapshot(true, nowMs);
+        msg = full;
+        c.needFull = false;
+      } else {
+        delta = delta || this.snapshot(false, nowMs);
+        msg = delta;
+      }
+      try {
+        c.send(Object.assign({}, msg, { you: id }));
+      } catch (e) {
+        // A dropped connection is cleaned up by its close handler; anything else is a real bug,
+        // so say so once per player instead of failing silently.
+        if (!c.warned) { c.warned = true; console.warn(`HexArena: could not send to seat ${id}:`, e); }
+      }
+    }
+    this.world.changes.clear();
+    this.world.events = [];
+  }
+}
+
+const api = {
+  TICK_MS, ROUND_MS, WIN_SHARE, RESULTS_MS, RESPAWN_MS, MOVE_SPEED, BOT_TURN_RATE, HEX, SQRT3,
+  MODES, COLORS, TEAM_COLORS, TEAM_NAMES,
+  wrapAngle, makeCode, cleanName, getBoard,
+  createWorld, step, steer, spawn, kill, setOwner, resetRound, standings, sideInfo,
+  Room,
+};
+
+if (typeof module !== 'undefined' && module.exports) module.exports = api;
+else root.HexCore = api;
+})(typeof self !== 'undefined' ? self : this);
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+  #root { width: 100%; height: 100vh; }
+  input:focus { outline: 2px solid #00d4ff; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<!-- Same engine shell as Arena Survivor: type="text/plain" keeps babel-standalone's auto-scanner off
+     this tag, and we compile it below with the classic JSX runtime (no bundler, no react/jsx-runtime). -->
+<script id="game-source" type="text/plain">
+const { useState, useEffect, useRef } = React;
+const { TICK_MS, ROUND_MS, WIN_SHARE, RESPAWN_MS, MOVE_SPEED, HEX, SQRT3, MODES, COLORS } = HexCore;
+
+const HUD_HEIGHT = 96;         // the canvas fills the rest of the window below the HUD bar
+const PEER_PREFIX = 'hexarena-';
+
+// Shift a #rrggbb colour toward white (amount > 0) or black (amount < 0)
+function shade(hex, amount) {
+  const n = parseInt(hex.slice(1), 16);
+  const mix = (c) => Math.round(amount > 0 ? c + (255 - c) * amount : c * (1 + amount));
+  const r = mix((n >> 16) & 255), g = mix((n >> 8) & 255), b = mix(n & 255);
+  return `rgb(${r},${g},${b})`;
+}
+
+function withAlpha(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function store(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    localStorage.setItem(key, value);
+  } catch (e) { /* storage blocked: just don't remember */ }
+  return null;
+}
+
+// ---- Connections. Every mode ends up as the same thing: a stream of snapshots in, steering out. ----
+
+// Solo, or the hosting side of peer-to-peer: the room runs right here in this tab.
+function localRoom(code, cfg, onMessage) {
+  const room = new HexCore.Room(code, cfg.mode);
+  const seat = room.join(onMessage, cfg.name, cfg.color);
+  return {
+    room,
+    label: cfg.mode === 'solo' ? 'Solo' : 'Peer-to-peer host',
+    update: now => room.tick(now),
+    send: m => { if (m.t === 'input') room.input(seat.id, m.dx, m.dy); },
+    close: () => {},
+  };
+}
+
+function serverSession(cfg, onMessage, onClose) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+    let opened = false, closedByUs = false;
+    ws.onopen = () => {
+      opened = true;
+      ws.send(JSON.stringify(cfg.action === 'host'
+        ? { t: 'create', mode: cfg.mode, name: cfg.name, color: cfg.color }
+        : { t: 'join', room: cfg.code, name: cfg.name, color: cfg.color }));
+      resolve({
+        label: 'Server',
+        send: m => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); },
+        close: () => { closedByUs = true; ws.close(); },
+      });
+    };
+    ws.onmessage = e => { try { onMessage(JSON.parse(e.data)); } catch (err) { /* ignore a bad frame */ } };
+    ws.onerror = () => { if (!opened) reject(new Error('Could not reach the HexArena server.')); };
+    ws.onclose = () => { if (opened && !closedByUs) onClose('Lost connection to the server.'); };
+  });
+}
+
+// PeerJS's JSON channel refuses any single message of ~16KB or more (it raises an error event
+// instead of sending), and a full board is 23-45KB. So big messages go out in pieces and are
+// stitched back together on arrival.
+const PIECE_CHARS = 8000;
+let pieceSeq = 0;
+
+function peerSend(conn, obj) {
+  if (!conn.open) return;
+  const text = JSON.stringify(obj);
+  if (text.length <= PIECE_CHARS) { conn.send(obj); return; }
+  const id = ++pieceSeq;
+  const n = Math.ceil(text.length / PIECE_CHARS);
+  for (let i = 0; i < n; i++) conn.send({ t: 'piece', id, i, n, s: text.slice(i * PIECE_CHARS, (i + 1) * PIECE_CHARS) });
+}
+
+function pieceReader(onMessage) {
+  const pending = new Map();
+  return (m) => {
+    if (!m || m.t !== 'piece') { onMessage(m); return; }
+    let parts = pending.get(m.id);
+    if (!parts) { parts = []; pending.set(m.id, parts); }
+    parts[m.i] = m.s;
+    if (parts.filter(p => p !== undefined).length === m.n) {
+      pending.delete(m.id);
+      onMessage(JSON.parse(parts.join('')));
+    }
+  };
+}
+
+function needPeerJs() {
+  if (typeof Peer === 'undefined') throw new Error('The peer-to-peer library did not load. Are you offline?');
+}
+
+async function p2pHost(cfg, onMessage) {
+  needPeerJs();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = HexCore.makeCode();
+    const peer = new Peer(PEER_PREFIX + code.toLowerCase());
+    const result = await new Promise(res => {
+      peer.on('open', () => res('ok'));
+      peer.on('error', err => res(err));
+    });
+    if (result !== 'ok') {
+      peer.destroy();
+      if (result && result.type === 'unavailable-id') continue; // code already in use somewhere
+      throw new Error('The peer-to-peer service is unreachable right now. Try again, or run Start HexArena.bat to host on your PC instead.');
+    }
+
+    const session = localRoom(code, cfg, onMessage);
+    // Each friend who connects takes a seat in the room running in this tab.
+    peer.on('connection', conn => {
+      let seat = -1;
+      conn.on('data', m => {
+        if (!m || typeof m !== 'object') return;
+        if (m.t === 'join' && seat < 0) {
+          const res = session.room.join(obj => peerSend(conn, obj), m.name, m.color);
+          if (res.error) {
+            peerSend(conn, { t: 'error', msg: res.error });
+            setTimeout(() => conn.close(), 500);
+          } else {
+            seat = res.id;
+          }
+        } else if (m.t === 'input' && seat >= 0) {
+          session.room.input(seat, m.dx, m.dy);
+        }
+      });
+      // Only a closed connection frees the seat. PeerJS also raises errors for problems that
+      // don't end the connection, and treating those as a disconnect kicked people out.
+      conn.on('close', () => { if (seat >= 0) session.room.leave(seat); seat = -1; });
+      conn.on('error', err => console.warn('HexArena: connection problem with a player:', err && (err.type || err.message)));
+    });
+    session.close = () => peer.destroy();
+    return session;
+  }
+  throw new Error('Could not get a free room code. Try again.');
+}
+
+async function p2pJoin(cfg, onMessage, onClose) {
+  needPeerJs();
+  const code = cfg.code;
+  const peer = new Peer();
+  await new Promise((res, rej) => {
+    peer.on('open', res);
+    peer.on('error', err => {
+      if (err.type === 'peer-unavailable') return; // handled below, once we try to connect
+      rej(new Error('The peer-to-peer service is unreachable right now. Try again later.'));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    let settled = false, closedByUs = false;
+    const fail = text => {
+      if (settled) return;
+      settled = true;
+      peer.destroy();
+      reject(new Error(text));
+    };
+    const timer = setTimeout(() => fail(`No room with code ${code}.`), 12000);
+    peer.on('error', err => { if (err.type === 'peer-unavailable') { clearTimeout(timer); fail(`No room with code ${code}.`); } });
+
+    // JSON, like the server: PeerJS's default binary packer chokes on some values and fails silently
+    const conn = peer.connect(PEER_PREFIX + code.toLowerCase(), { reliable: true, serialization: 'json' });
+    conn.on('open', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      conn.send({ t: 'join', name: cfg.name, color: cfg.color });
+      resolve({
+        label: 'Peer-to-peer',
+        send: m => { if (conn.open) conn.send(m); },
+        close: () => { closedByUs = true; peer.destroy(); },
+      });
+    });
+    conn.on('data', pieceReader(onMessage));
+    conn.on('close', () => { if (!closedByUs) onClose('The host left, so the room closed.'); });
+  });
+}
+
+async function openSession(cfg, onMessage, onClose) {
+  if (cfg.mode === 'solo') return localRoom('SOLO', cfg, onMessage);
+  if (cfg.transport === 'server') return serverSession(cfg, onMessage, onClose);
+  return cfg.action === 'host' ? p2pHost(cfg, onMessage) : p2pJoin(cfg, onMessage, onClose);
+}
+
+// ---- The view: this player's copy of the world, rebuilt from snapshots ----
+
+function createView() {
+  return {
+    board: null, grid: null, owner: null, trail: null,
+    counts: [], sides: [], players: [], teamSize: 1, teamCount: 0,
+    simTime: 0, recvAt: 0, phase: 'playing', over: null, nextRoundAt: null,
+    you: 0, room: '', mode: 'ffa',
+    particles: [], flashes: [], toasts: [], shake: 0,
+    camX: 0, camY: 0, minimap: null, minimapAt: -Infinity,
+  };
+}
+
+function burst(v, x, y, color, count, power, now) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 0.6 + Math.random() * power;
+    v.particles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      size: 1.5 + Math.random() * 2.5, color, born: now, life: 400 + Math.random() * 300,
+    });
+  }
+}
+
+function onEvent(v, e, now) {
+  const B = v.board;
+  if (e.type === 'spawn') burst(v, e.x, e.y, e.color, 14, 2, now);
+  else if (e.type === 'reseed') burst(v, e.x, e.y, e.color, 12, 2, now);
+  else if (e.type === 'kill') {
+    burst(v, e.x, e.y, e.color, 30, 4, now);
+    if (e.victim === v.you || e.killer === v.you) v.shake = 9;
+  } else if (e.type === 'capture') {
+    v.flashes.push({ tiles: e.tiles, color: e.color, born: now });
+    for (let i = 0; i < Math.min(20, e.tiles.length); i++) {
+      const t = e.tiles[Math.floor(Math.random() * e.tiles.length)];
+      burst(v, B.CENTER_X[t], B.CENTER_Y[t], e.color, 1, 1.2, now);
+    }
+  } else if (e.type === 'joined' && e.id !== v.you) {
+    v.toasts.push({ text: `${e.name} joined`, at: now });
+  } else if (e.type === 'left') {
+    v.toasts.push({ text: `${e.name} left`, at: now });
+  }
+}
+
+function buildGridLayer(B) {
+  const layer = document.createElement('canvas');
+  // The whole board is pre-rendered once; each frame blits it under the camera.
+  layer.width = B.WORLD_W;
+  layer.height = B.WORLD_H;
+  const ctx = layer.getContext('2d');
+  const floor = ctx.createRadialGradient(B.WORLD_W / 2, B.WORLD_H / 2, 60, B.WORLD_W / 2, B.WORLD_H / 2, B.WORLD_W * 0.62);
+  floor.addColorStop(0, '#14141f');
+  floor.addColorStop(1, '#07070c');
+  ctx.fillStyle = floor;
+  ctx.fillRect(0, 0, B.WORLD_W, B.WORLD_H);
+  const tiles = new Path2D();
+  for (let t = 0; t < B.TILE_COUNT; t++) addHex(tiles, B, t, HEX - 0.8);
+  ctx.fillStyle = 'rgba(255,255,255,0.025)';
+  ctx.fill(tiles);
+  ctx.strokeStyle = '#1d1d2c';
+  ctx.lineWidth = 1;
+  ctx.stroke(tiles);
+  return layer;
+}
+
+function addHex(path, B, t, size) {
+  const cx = B.CENTER_X[t], cy = B.CENTER_Y[t];
+  for (let k = 0; k < 6; k++) {
+    const a = (Math.PI / 180) * (60 * k - 30);
+    const x = cx + size * Math.cos(a), y = cy + size * Math.sin(a);
+    if (k === 0) path.moveTo(x, y); else path.lineTo(x, y);
+  }
+  path.closePath();
+}
+
+function applyState(v, msg, now) {
+  if (!v.board || v.board.COLS !== msg.cols || v.board.ROWS !== msg.rows) {
+    v.board = HexCore.getBoard(msg.cols, msg.rows);
+    v.grid = buildGridLayer(v.board);
+    v.owner = new Int8Array(v.board.TILE_COUNT).fill(-1);
+    v.trail = new Int8Array(v.board.TILE_COUNT).fill(-1);
+    v.minimap = null;
+  }
+  if (msg.owner) {
+    v.owner.set(msg.owner);
+    v.trail.set(msg.trail);
+    v.minimapAt = -Infinity;
+    v.particles = [];
+    v.flashes = [];
+  }
+  if (msg.delta) {
+    for (const [t, o, tr] of msg.delta) { v.owner[t] = o; v.trail[t] = tr; }
+  }
+  Object.assign(v, {
+    counts: msg.counts, sides: msg.sides, teamSize: msg.teamSize, teamCount: msg.sides.length,
+    simTime: msg.simTime, recvAt: now, phase: msg.phase, over: msg.over,
+    nextRoundAt: msg.nextRoundIn == null ? null : now + msg.nextRoundIn,
+    you: msg.you, room: msg.room, mode: msg.mode,
+  });
+  // sx/sy are the positions in the snapshot; x/y get extrapolated each frame between snapshots
+  v.players = msg.players.map(p => ({ ...p, sx: p.x, sy: p.y, trailPath: p.trail }));
+  (msg.events || []).forEach(e => onEvent(v, e, now));
+}
+
+function simNow(v, now) {
+  return v.simTime + (v.phase === 'playing' ? Math.min(250, now - v.recvAt) : 0);
+}
+
+// Snapshots arrive 20 times a second; in between, heads keep moving the way they were going.
+function advanceView(v, now) {
+  const B = v.board;
+  const steps = v.phase === 'playing' ? Math.min(12, (now - v.recvAt) / TICK_MS) : 0;
+  v.players.forEach(p => {
+    if (p.alive && p.moving) {
+      p.x = Math.max(B.X_MIN, Math.min(B.X_MAX, p.sx + Math.cos(p.angle) * MOVE_SPEED * steps));
+      p.y = Math.max(B.Y_MIN, Math.min(B.Y_MAX, p.sy + Math.sin(p.angle) * MOVE_SPEED * steps));
+    } else {
+      p.x = p.sx;
+      p.y = p.sy;
+    }
+  });
+  v.particles = v.particles.filter(pt => {
+    pt.x += pt.vx; pt.y += pt.vy;
+    pt.vx *= 0.92; pt.vy *= 0.92;
+    return now - pt.born < pt.life;
+  });
+  v.flashes = v.flashes.filter(f => now - f.born < 350);
+  v.toasts = v.toasts.filter(t => now - t.at < 4000).slice(-4);
+}
+
+// ---- Rendering ----
+
+function render(ctx, v, now) {
+  const B = v.board;
+  const you = v.players[v.you];
+  const tNow = simNow(v, now);
+
+  // Camera follows you (and holds where you fell), clamped to the board edges. The view is the
+  // canvas, sized to the window; a window bigger than the board centres the board on that axis.
+  const VW = ctx.canvas.width, VH = ctx.canvas.height;
+  if (you.alive) {
+    v.camX = Math.round(B.WORLD_W <= VW ? (B.WORLD_W - VW) / 2 : Math.max(0, Math.min(B.WORLD_W - VW, you.x - VW / 2)));
+    v.camY = Math.round(B.WORLD_H <= VH ? (B.WORLD_H - VH) / 2 : Math.max(0, Math.min(B.WORLD_H - VH, you.y - VH / 2)));
+  }
+  const camX = v.camX, camY = v.camY;
+
+  ctx.fillStyle = '#05050a';
+  ctx.fillRect(0, 0, VW, VH);
+
+  ctx.save();
+  ctx.translate((Math.random() - 0.5) * v.shake, (Math.random() - 0.5) * v.shake);
+  v.shake *= 0.9;
+  ctx.translate(-camX, -camY);
+
+  ctx.drawImage(v.grid, 0, 0);
+  ctx.strokeStyle = 'rgba(0,212,255,0.55)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(1.5, 1.5, B.WORLD_W - 3, B.WORLD_H - 3); // board edge, visible when the camera reaches it
+
+  // Land is batched into one path per side; trail hexes into one path per player
+  const land = v.sides.map(() => new Path2D());
+  const trails = v.players.map(() => new Path2D());
+  const viewL = camX - HEX * 2, viewR = camX + VW + HEX * 2;
+  const viewT = camY - HEX * 2, viewB = camY + VH + HEX * 2;
+  for (let t = 0; t < B.TILE_COUNT; t++) {
+    if (B.CENTER_X[t] < viewL || B.CENTER_X[t] > viewR || B.CENTER_Y[t] < viewT || B.CENTER_Y[t] > viewB) continue;
+    const o = v.owner[t];
+    if (o >= 0) addHex(land[o], B, t, HEX - 0.8);
+    const tr = v.trail[t];
+    if (tr >= 0) addHex(trails[tr], B, t, HEX * 0.55);
+  }
+  v.sides.forEach((s, side) => {
+    ctx.fillStyle = shade(s.color, -0.5);
+    ctx.fill(land[side]);
+    ctx.strokeStyle = withAlpha(s.color, 0.35);
+    ctx.lineWidth = 1;
+    ctx.stroke(land[side]);
+  });
+
+  // Capture flash: newly won tiles blow out bright, then settle into the owner's colour
+  v.flashes.forEach(f => {
+    const fade = 1 - (now - f.born) / 350;
+    const path = new Path2D();
+    f.tiles.forEach(t => addHex(path, B, t, HEX - 0.8));
+    ctx.fillStyle = withAlpha(f.color, 0.6 * fade);
+    ctx.fill(path);
+  });
+
+  // Trails go on top of ALL land, so a tail crossing enemy ground is never painted over
+  v.players.forEach((p, id) => {
+    if (!p.alive || !p.trailPath || !p.trailPath.length) return;
+    ctx.fillStyle = withAlpha(p.color, 0.18 + 0.08 * Math.sin(now / 120));
+    ctx.fill(trails[id]);
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(p.trailPath[0][0], p.trailPath[0][1]);
+    p.trailPath.forEach(([x, y]) => ctx.lineTo(x, y));
+    ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+    ctx.lineWidth = 9;
+    ctx.stroke();
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 5;
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  // Soft light pool under you
+  if (you.alive) {
+    const pool = ctx.createRadialGradient(you.x, you.y, 0, you.x, you.y, 110);
+    pool.addColorStop(0, withAlpha(you.color, 0.1));
+    pool.addColorStop(1, withAlpha(you.color, 0));
+    ctx.fillStyle = pool;
+    ctx.fillRect(you.x - 110, you.y - 110, 220, 220);
+  }
+
+  v.particles.forEach(pt => {
+    const t = (now - pt.born) / pt.life;
+    ctx.globalAlpha = Math.max(0, 1 - t);
+    ctx.fillStyle = pt.color;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, pt.size * (1 - t * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  // Heads
+  v.players.forEach(p => {
+    if (!p.alive) return;
+    const r = p.isBot ? 9 : 10;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y + r * 0.8, r * 0.9, r * 0.38, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.angle);
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 14;
+    const body = ctx.createLinearGradient(-r, -r, r, r);
+    body.addColorStop(0, shade(p.color, 0.45));
+    body.addColorStop(1, shade(p.color, -0.3));
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = p.id === you.id ? '#fff' : shade(p.color, 0.7);
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = shade(p.color, 0.85);
+    ctx.beginPath();
+    ctx.moveTo(r + 4, 0);
+    ctx.lineTo(r * 0.3, r * 0.5);
+    ctx.lineTo(r * 0.3, -r * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Your killer wears a pulsing red ring until you get your revenge
+    const isNemesis = you.nemesis === p.id;
+    if (isNemesis) {
+      ctx.strokeStyle = `rgba(255,71,87,${0.6 + 0.4 * Math.sin(now / 150)})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 7, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    const teammate = v.teamSize > 1 && p.team === you.team && p.id !== you.id;
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = isNemesis ? '#ff4757' : withAlpha(p.color, 0.9);
+    const label = isNemesis ? `${p.name} - REVENGE` : teammate ? `${p.name} (team)` : p.name;
+    ctx.fillText(label, p.x, p.y - r - 9);
+  });
+
+  if (!you.alive && v.phase === 'playing') {
+    const secs = Math.max(0, (you.respawnAt - tNow) / 1000).toFixed(1);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillStyle = '#ff4757';
+    ctx.fillText(`${you.killedBy || 'Someone'} cut your trail`, camX + VW / 2, camY + VH / 2 - 14);
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#eee';
+    ctx.fillText(`Respawning in ${secs}`, camX + VW / 2, camY + VH / 2 + 14);
+  }
+
+  if (you.alive && you.revengeAt != null && tNow - you.revengeAt < 2000) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = `rgba(255,215,0,${1 - (tNow - you.revengeAt) / 2000})`;
+    ctx.fillText('REVENGE', you.x, you.y - 36);
+  }
+
+  if (you.alive && !you.moving) {
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(255,255,255,${0.6 + 0.4 * Math.sin(now / 200)})`;
+    ctx.fillText('WASD or arrow keys to move', you.x, you.y + 34);
+  }
+
+  ctx.restore();
+
+  const vigR = Math.max(VW, VH);
+  const vig = ctx.createRadialGradient(VW / 2, VH / 2, vigR * 0.3, VW / 2, VH / 2, vigR * 0.75);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.5)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, VW, VH);
+
+  // Join/leave notices, top centre
+  v.toasts.forEach((t, i) => {
+    const fade = Math.min(1, (4000 - (now - t.at)) / 600);
+    ctx.globalAlpha = Math.max(0, fade);
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    const w = ctx.measureText(t.text).width + 20;
+    ctx.fillRect(VW / 2 - w / 2, 12 + i * 26, w, 22);
+    ctx.fillStyle = '#eee';
+    ctx.fillText(t.text, VW / 2, 27 + i * 26);
+  });
+  ctx.globalAlpha = 1;
+
+  // Minimap: the whole board with live head dots and your view box. It takes the first corner
+  // that doesn't cover your head or tail, which must never be hidden.
+  const MM_W = 160, MM_H = Math.round((MM_W * B.WORLD_H) / B.WORLD_W);
+  const pad = 16;
+  const yourPoints = [];
+  if (you.alive) {
+    yourPoints.push([you.x - camX, you.y - camY]);
+    if (you.trailPath) you.trailPath.forEach(([x, y]) => yourPoints.push([x - camX, y - camY]));
+  }
+  const corners = [
+    [VW - MM_W - 12, VH - MM_H - 12],
+    [VW - MM_W - 12, 12],
+    [12, VH - MM_H - 12],
+    [12, 12],
+  ];
+  const clear = ([cx, cy]) => !yourPoints.some(([x, y]) =>
+    x > cx - pad && x < cx + MM_W + pad && y > cy - pad && y < cy + MM_H + pad);
+  const [mmX, mmY] = corners.find(clear) || corners[0];
+  const sx = MM_W / B.WORLD_W, sy = MM_H / B.WORLD_H;
+  if (!v.minimap) {
+    v.minimap = document.createElement('canvas');
+    v.minimap.width = MM_W;
+    v.minimap.height = MM_H;
+    v.minimapAt = -Infinity;
+  }
+  if (now - v.minimapAt >= 160) {
+    v.minimapAt = now;
+    const m = v.minimap.getContext('2d');
+    m.fillStyle = '#0b0b14';
+    m.fillRect(0, 0, MM_W, MM_H);
+    const cellW = SQRT3 * HEX * sx + 0.5, cellH = 1.5 * HEX * sy + 0.5;
+    for (let t = 0; t < B.TILE_COUNT; t++) {
+      // Trails win over land here too, so a tail across enemy ground still shows on the minimap
+      const tr = v.trail[t], o = v.owner[t];
+      if (tr < 0 && o < 0) continue;
+      m.fillStyle = tr >= 0 ? shade(v.players[tr].color, 0.55) : shade(v.sides[o].color, -0.25);
+      m.fillRect(B.CENTER_X[t] * sx - cellW / 2, B.CENTER_Y[t] * sy - cellH / 2, cellW, cellH);
+    }
+  }
+  ctx.globalAlpha = 0.85;
+  ctx.drawImage(v.minimap, mmX, mmY);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = 'rgba(0,212,255,0.6)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(mmX + 0.5, mmY + 0.5, MM_W, MM_H);
+  v.players.forEach(p => {
+    if (!p.alive) return;
+    ctx.fillStyle = p.id === you.id ? '#fff' : shade(p.color, 0.4);
+    ctx.beginPath();
+    ctx.arc(mmX + p.x * sx, mmY + p.y * sy, p.id === you.id ? 3 : 2, 0, Math.PI * 2);
+    ctx.fill();
+    if (you.nemesis === p.id) {
+      ctx.strokeStyle = '#ff4757';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(mmX + p.x * sx, mmY + p.y * sy, 5.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  });
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.strokeRect(mmX + camX * sx, mmY + camY * sy, VW * sx, VH * sy);
+}
+
+// ---- UI ----
+
+const panel = { fontFamily: 'monospace', color: '#eee' };
+const btn = (bg, fg) => ({
+  padding: '12px 22px', fontSize: '15px', background: bg, color: fg, border: 'none', borderRadius: '6px',
+  cursor: 'pointer', fontWeight: 'bold', fontFamily: 'monospace',
+});
+
+function Swatch({ color, size = 10 }) {
+  return <span style={{ display: 'inline-block', width: `${size}px`, height: `${size}px`, background: color, borderRadius: '2px', marginRight: '8px', flex: 'none' }} />;
+}
+
+const MODE_CARDS = [
+  { key: 'solo', title: 'SOLO', desc: 'You against 4 bots, right here. No connection needed.' },
+  { key: 'ffa', title: 'FREE FOR ALL', desc: 'Online room for 5. Bots fill empty seats; friends drop in any time.' },
+  { key: 'teams', title: 'TEAMS', desc: '4 teams of 2 on a map twice the size. Shared land; teammates’ trails are safe.' },
+];
+
+function Menu({ net, error, onPlay }) {
+  const [name, setName] = useState(() => store('hexarena-name') || '');
+  const [color, setColor] = useState(() => store('hexarena-color') || COLORS[0]);
+  const [mode, setMode] = useState(() => store('hexarena-mode') || 'solo');
+  const [code, setCode] = useState('');
+
+  const play = (action) => {
+    store('hexarena-name', name);
+    store('hexarena-color', color);
+    store('hexarena-mode', mode);
+    onPlay({ action, mode: action === 'join' ? 'join' : mode, code: code.trim().toUpperCase(), name, color });
+  };
+  const codeOk = /^[A-Z]{4}$/.test(code.trim().toUpperCase());
+  const online = net.transport !== 'checking';
+
+  return (
+    <div style={{ ...panel, background: '#1a1a2e', height: '100vh', overflowY: 'auto', padding: '28px 20px', boxSizing: 'border-box' }}>
+      <h1 style={{ textAlign: 'center', fontSize: '44px', margin: '10px 0 6px', color: '#00d4ff', letterSpacing: '4px' }}>HEXARENA</h1>
+      <div style={{ textAlign: 'center', fontSize: '13px', color: '#888', marginBottom: '26px' }}>
+        Paint the grid. Cut their trails. Own the arena.
+      </div>
+
+      <div style={{ maxWidth: '640px', margin: '0 auto' }}>
+        {error && (
+          <div style={{ border: '2px solid #ff4757', color: '#ff8a95', borderRadius: '6px', padding: '10px 14px', marginBottom: '16px', fontSize: '13px' }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '18px' }}>
+          <label style={{ flex: '1 1 200px', fontSize: '12px', color: '#888' }}>
+            YOUR NAME
+            <input
+              value={name}
+              maxLength={12}
+              placeholder="Player"
+              onChange={e => setName(e.target.value)}
+              style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: '6px', padding: '10px', background: '#0f0f1f', color: '#eee', border: '2px solid #444', borderRadius: '6px', fontFamily: 'monospace', fontSize: '15px' }}
+            />
+          </label>
+          <div style={{ flex: '1 1 260px', fontSize: '12px', color: '#888' }}>
+            YOUR COLOUR {mode === 'teams' ? '(Teams use team colours)' : ''}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap', opacity: mode === 'teams' ? 0.35 : 1 }}>
+              {COLORS.map(c => (
+                <button
+                  key={c}
+                  aria-label={`colour ${c}`}
+                  onClick={() => setColor(c)}
+                  style={{ width: '30px', height: '30px', background: c, borderRadius: '6px', cursor: 'pointer', border: c === color ? '3px solid #fff' : '3px solid transparent', boxShadow: c === color ? `0 0 10px ${c}` : 'none' }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>GAME MODE</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', marginBottom: '18px' }}>
+          {MODE_CARDS.map(m => (
+            <button
+              key={m.key}
+              onClick={() => setMode(m.key)}
+              style={{ textAlign: 'left', padding: '12px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'monospace', background: mode === m.key ? '#00d4ff' : '#2a2a4e', color: mode === m.key ? '#1a1a2e' : '#eee', border: `2px solid ${mode === m.key ? '#00d4ff' : '#444'}` }}
+            >
+              <div style={{ fontWeight: 'bold', fontSize: '15px', marginBottom: '4px' }}>{m.title}</div>
+              <div style={{ fontSize: '11px', opacity: 0.85, lineHeight: 1.4 }}>{m.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        {mode === 'solo' ? (
+          <div style={{ textAlign: 'center', marginBottom: '22px' }}>
+            <button onClick={() => play('solo')} style={{ ...btn('#00ff00', '#000'), padding: '16px 56px', fontSize: '18px' }}>PLAY</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'stretch', marginBottom: '10px' }}>
+            <button disabled={!online} onClick={() => play('host')} style={{ ...btn('#00ff00', '#000'), flex: '1 1 200px', opacity: online ? 1 : 0.5 }}>
+              HOST A {mode === 'teams' ? 'TEAMS' : 'FREE FOR ALL'} ROOM
+            </button>
+            <div style={{ display: 'flex', gap: '8px', flex: '1 1 260px' }}>
+              <input
+                value={code}
+                maxLength={4}
+                placeholder="CODE"
+                onChange={e => setCode(e.target.value.toUpperCase())}
+                onKeyDown={e => { if (e.key === 'Enter' && codeOk && online) play('join'); }}
+                style={{ width: '110px', padding: '10px', background: '#0f0f1f', color: '#eee', border: '2px solid #444', borderRadius: '6px', fontFamily: 'monospace', fontSize: '18px', letterSpacing: '4px', textAlign: 'center' }}
+              />
+              <button disabled={!codeOk || !online} onClick={() => play('join')} style={{ ...btn('#00d4ff', '#000'), flex: 1, opacity: codeOk && online ? 1 : 0.5 }}>
+                JOIN ROOM
+              </button>
+            </div>
+          </div>
+        )}
+
+        {mode !== 'solo' && (
+          <div style={{ fontSize: '12px', color: '#999', lineHeight: 1.6, marginBottom: '22px', borderLeft: '3px solid #444', paddingLeft: '10px' }}>
+            {net.transport === 'checking' && 'Checking for a HexArena server...'}
+            {net.transport === 'server' && (
+              <>
+                Online through the HexArena server on this PC. Friends on your network open:{' '}
+                {(net.urls && net.urls.length ? net.urls : [location.origin]).map(u => (
+                  <span key={u} style={{ color: '#00d4ff', marginRight: '10px' }}>{u}</span>
+                ))}
+                and join with your room code. Joining uses the room's own mode.
+              </>
+            )}
+            {net.transport === 'p2p' && (
+              <>
+                Peer-to-peer: the host's browser runs the room, so keep that tab open. Room codes are
+                matched through the free PeerJS service. For a dedicated room, run Start HexArena.bat
+                instead. Joining uses the room's own mode.
+              </>
+            )}
+          </div>
+        )}
+
+        <div style={{ border: '2px solid #00d4ff', borderRadius: '8px', padding: '14px 22px' }}>
+          <h2 style={{ marginTop: 0, color: '#00d4ff', fontSize: '16px' }}>RULES</h2>
+          <ol style={{ lineHeight: 1.7, fontSize: '12px', paddingLeft: '18px', margin: 0 }}>
+            <li>Steer with WASD or the arrow keys: straight up, down, left or right, or hold two keys for a diagonal. You never stop once you start.</li>
+            <li>Leaving your land draws a trail. Return to your land to claim the trail and everything it encloses.</li>
+            <li>The only way out is having your trail cut: touch an enemy trail and they're out. Your own trail (and in Teams, your teammate's) is safe.</li>
+            <li>Get cut and you respawn {RESPAWN_MS / 1000} seconds later. Your killer is marked in red: cut them back for revenge.</li>
+            <li>Own {WIN_SHARE * 100}% of the board, or the most land after {ROUND_MS / 60000} minutes, to win. A new round starts on its own.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Hud({ hud, onLeave }) {
+  if (!hud) return null;
+  const secs = Math.max(0, Math.ceil(hud.timeLeft / 1000));
+  const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  return (
+    <div style={{ ...panel, width: '100%', height: `${HUD_HEIGHT}px`, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '14px', padding: '8px 16px', fontSize: '13px', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+        <div>
+          <div style={{ fontSize: '22px', color: '#00d4ff', fontWeight: 'bold' }}>{clock}</div>
+          <div style={{ width: '120px', height: '6px', background: '#333', borderRadius: '3px', overflow: 'hidden', marginTop: '4px' }}>
+            <div style={{ width: `${(hud.timeLeft / ROUND_MS) * 100}%`, height: '100%', background: '#00d4ff' }} />
+          </div>
+          <button onClick={onLeave} style={{ marginTop: '8px', padding: '3px 10px', fontSize: '11px', background: '#2a2a4e', color: '#ccc', border: '1px solid #555', borderRadius: '4px', cursor: 'pointer', fontFamily: 'monospace' }}>
+            LEAVE
+          </button>
+        </div>
+        <div style={{ border: '1px solid #333', borderRadius: '6px', padding: '4px 10px' }}>
+          <div style={{ fontSize: '10px', color: '#888' }}>{hud.modeLabel.toUpperCase()}</div>
+          {hud.room === 'SOLO'
+            ? <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#eee' }}>SOLO</div>
+            : (
+              <>
+                <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#ffd700', letterSpacing: '3px' }}>{hud.room}</div>
+                <div style={{ fontSize: '10px', color: '#888' }}>room code: friends join any time</div>
+              </>
+            )}
+        </div>
+      </div>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: '22px', color: hud.youColor, fontWeight: 'bold' }}>{hud.youPct.toFixed(1)}%</div>
+        <div style={{ color: '#888', fontSize: '11px' }}>
+          {hud.teams ? 'TEAM LAND' : 'YOUR LAND'}  /  {hud.youKills} KILLS  /  {hud.youDeaths} DEATHS
+        </div>
+        {hud.nemesis && (
+          <div style={{ color: '#ff4757', fontSize: '12px', fontWeight: 'bold', marginTop: '3px' }}>REVENGE: {hud.nemesis}</div>
+        )}
+      </div>
+      <div style={{ minWidth: '210px', fontSize: '12px' }}>
+        {hud.rows.map((r, i) => {
+          const mine = r.members.some(m => m.id === hud.youId);
+          return (
+            <div key={r.side} style={{ display: 'flex', alignItems: 'center', opacity: r.alive ? 1 : 0.45, fontWeight: mine ? 'bold' : 'normal' }}>
+              <span style={{ width: '14px', color: '#666' }}>{i + 1}</span>
+              <Swatch color={r.color} />
+              <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {hud.teams
+                  ? `${r.name}: ${r.members.map(m => m.name + (m.isBot ? '*' : '')).join(', ')}`
+                  : `${r.name}${r.members[0].isBot ? '*' : ''}${r.alive ? '' : ' (respawning)'}`}
+              </span>
+              <span style={{ marginLeft: '8px' }}>{r.pct.toFixed(1)}%</span>
+            </div>
+          );
+        })}
+        <div style={{ color: '#555', fontSize: '10px' }}>* bot</div>
+      </div>
+    </div>
+  );
+}
+
+function Result({ result, onLeave }) {
+  const { won, title, detail, rows, nextIn, youSide, teams } = result;
+  return (
+    <div style={{ ...panel, position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 }}>
+      <div style={{ textAlign: 'center', background: '#1a1a2e', border: `3px solid ${won ? '#ffd700' : '#ff4757'}`, borderRadius: '8px', padding: '26px 34px', minWidth: '360px', maxWidth: '92vw' }}>
+        <h1 style={{ fontSize: '40px', color: won ? '#ffd700' : '#ff4757', margin: '0 0 8px' }}>{title}</h1>
+        <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '18px' }}>{detail}</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', marginBottom: '20px' }}>
+          <thead>
+            <tr style={{ color: '#666', fontSize: '11px' }}>
+              <th style={{ textAlign: 'left', padding: '4px' }}>#</th>
+              <th style={{ textAlign: 'left', padding: '4px' }}>{teams ? 'TEAM' : 'PLAYER'}</th>
+              <th style={{ textAlign: 'right', padding: '4px' }}>LAND</th>
+              <th style={{ textAlign: 'right', padding: '4px' }}>KILLS</th>
+              <th style={{ textAlign: 'right', padding: '4px' }}>DEATHS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.side} style={{ fontWeight: r.side === youSide ? 'bold' : 'normal', background: r.side === youSide ? 'rgba(0,255,136,0.08)' : 'transparent' }}>
+                <td style={{ textAlign: 'left', padding: '4px', color: '#666' }}>{i + 1}</td>
+                <td style={{ textAlign: 'left', padding: '4px' }}>
+                  <Swatch color={r.color} />{r.name}
+                  {teams && <span style={{ color: '#888', fontSize: '11px' }}> ({r.members.map(m => m.name).join(', ')})</span>}
+                </td>
+                <td style={{ textAlign: 'right', padding: '4px' }}>{r.pct.toFixed(1)}%</td>
+                <td style={{ textAlign: 'right', padding: '4px' }}>{r.kills}</td>
+                <td style={{ textAlign: 'right', padding: '4px' }}>{r.deaths}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ color: '#00d4ff', marginBottom: '14px' }}>Next round in {nextIn}</div>
+        <button onClick={onLeave} style={btn('#2a2a4e', '#eee')}>LEAVE</button>
+      </div>
+    </div>
+  );
+}
+
+function buildHud(v, now) {
+  const you = v.players[v.you];
+  const tNow = simNow(v, now);
+  const teams = v.teamSize > 1;
+  const hud = {
+    timeLeft: ROUND_MS - tNow,
+    room: v.room,
+    modeLabel: (MODES[v.mode] || MODES.ffa).label,
+    teams,
+    youId: you.id,
+    youColor: you.color,
+    youPct: (v.counts[you.team] / v.board.TILE_COUNT) * 100,
+    youKills: you.kills,
+    youDeaths: you.deaths,
+    nemesis: you.nemesis >= 0 ? v.players[you.nemesis].name : null,
+    rows: HexCore.standings(v),
+    result: null,
+  };
+  if (v.phase === 'results' && v.over) {
+    const rows = v.over.standings;
+    const rank = rows.findIndex(r => r.side === you.team) + 1;
+    const won = rank === 1;
+    const winner = rows[0];
+    const why = v.over.reason === 'domination'
+      ? `${winner.side === you.team ? (teams ? 'Your team' : 'You') : winner.name} claimed ${WIN_SHARE * 100}% of the arena.`
+      : 'Time is up.';
+    hud.result = {
+      won, teams, rows, youSide: you.team,
+      title: won ? 'VICTORY' : 'ROUND OVER',
+      detail: `${why} ${teams ? 'Your team' : 'You'} placed #${rank}.`,
+      nextIn: Math.max(0, Math.ceil(((v.nextRoundAt || now) - now) / 1000)),
+    };
+  }
+  return hud;
+}
+
+function Game({ config, onExit }) {
+  const canvasRef = useRef(null);
+  const [hud, setHud] = useState(null);
+  const [status, setStatus] = useState(config.action === 'join' ? `Joining room ${config.code}...` : 'Starting...');
+  const viewSize = () => ({ w: window.innerWidth, h: Math.max(200, window.innerHeight - HUD_HEIGHT) });
+  const [size, setSize] = useState(viewSize);
+  const exitRef = useRef(null);
+
+  useEffect(() => {
+    const onResize = () => setSize(viewSize());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    const v = createView();
+    let session = null, ended = false, gotState = false, lastHud = 0;
+
+    const exit = (reason) => {
+      if (ended) return;
+      ended = true;
+      if (session) session.close();
+      onExit(reason || null);
+    };
+    exitRef.current = exit;
+
+    const onMessage = (msg) => {
+      if (!msg || ended) return;
+      if (msg.t === 'error') { exit(msg.msg); return; }
+      if (msg.t === 'state') {
+        applyState(v, msg, performance.now());
+        if (!gotState) { gotState = true; setStatus(null); }
+      }
+    };
+
+    openSession(config, onMessage, reason => exit(reason))
+      .then(s => { if (ended) s.close(); else session = s; })
+      .catch(err => exit(err.message || String(err)));
+
+    // Steering goes out the moment a key changes, so taps shorter than a frame still count.
+    const held = new Set();
+    const DIRS = { w: [0, -1], arrowup: [0, -1], s: [0, 1], arrowdown: [0, 1], a: [-1, 0], arrowleft: [-1, 0], d: [1, 0], arrowright: [1, 0] };
+    const sendDir = () => {
+      let dx = 0, dy = 0;
+      held.forEach(k => { dx += DIRS[k][0]; dy += DIRS[k][1]; });
+      dx = Math.sign(dx); dy = Math.sign(dy);
+      if ((dx || dy) && session) session.send({ t: 'input', dx, dy });
+    };
+    const down = (e) => {
+      const k = e.key.toLowerCase();
+      if (!DIRS[k] || e.target.tagName === 'INPUT') return;
+      e.preventDefault(); // arrow keys would otherwise scroll the page
+      if (!held.has(k)) { held.add(k); sendDir(); }
+    };
+    const up = (e) => {
+      const k = e.key.toLowerCase();
+      if (!held.delete(k)) return;
+      sendDir(); // letting go of one key of a diagonal turns you onto the other
+    };
+    const blur = () => held.clear();
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', blur);
+
+    // One loop: run the room if it lives in this tab, then draw. setInterval rather than
+    // requestAnimationFrame so a hosted room keeps running when the tab isn't visible.
+    const ctx = canvasRef.current.getContext('2d');
+    const loop = setInterval(() => {
+      const now = performance.now();
+      if (session && session.update) session.update(now);
+      if (!gotState) return;
+      advanceView(v, now);
+      render(ctx, v, now);
+      if (now - lastHud > 100) {
+        lastHud = now;
+        setHud(buildHud(v, now));
+      }
+    }, TICK_MS);
+
+    return () => {
+      ended = true;
+      clearInterval(loop);
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
+      if (session) session.close();
+    };
+  }, []);
+
+  const leave = () => exitRef.current && exitRef.current(null);
+
+  return (
+    <div style={{ background: '#000', width: '100%', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', overflow: 'hidden' }}>
+      <Hud hud={hud} onLeave={leave} />
+      <canvas ref={canvasRef} width={size.w} height={size.h} style={{ display: 'block' }} />
+      {status && (
+        <div style={{ ...panel, position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', zIndex: 200, flexDirection: 'column', gap: '18px' }}>
+          <div style={{ fontSize: '18px', color: '#00d4ff' }}>{status}</div>
+          <button onClick={leave} style={btn('#2a2a4e', '#eee')}>CANCEL</button>
+        </div>
+      )}
+      {hud && hud.result && <Result result={hud.result} onLeave={leave} />}
+    </div>
+  );
+}
+
+function App() {
+  const [screen, setScreen] = useState({ name: 'menu', error: null });
+  const [net, setNet] = useState({ transport: 'checking' });
+
+  // Served by hex-server.js? Then rooms live on that server. Opened as a file (or served by
+  // anything else)? Then rooms are peer-to-peer.
+  useEffect(() => {
+    if (!location.protocol.startsWith('http')) { setNet({ transport: 'p2p' }); return; }
+    fetch('hexarena-info', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(info => setNet(info && info.server ? { transport: 'server', urls: info.urls } : { transport: 'p2p' }))
+      .catch(() => setNet({ transport: 'p2p' }));
+  }, []);
+
+  if (screen.name === 'menu') {
+    return (
+      <Menu
+        net={net}
+        error={screen.error}
+        onPlay={cfg => setScreen({ name: 'game', cfg: { ...cfg, transport: net.transport } })}
+      />
+    );
+  }
+  return <Game config={screen.cfg} onExit={err => setScreen({ name: 'menu', error: err })} />;
+}
+</script>
+<script>
+  if (typeof HexCore === 'undefined') {
+    document.getElementById('root').innerHTML =
+      '<div style="font-family:monospace;color:#eee;padding:40px">The game engine failed to load.</div>';
+  } else {
+    const sourceCode = document.getElementById('game-source').textContent;
+    const compiled = Babel.transform(sourceCode, { presets: [["react", { runtime: "classic" }]] }).code;
+    eval(compiled);
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  }
+</script>
+</body>
+</html>
